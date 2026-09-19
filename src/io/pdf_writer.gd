@@ -18,6 +18,10 @@ var paper := Vector2(420.0, 297.0)
 ## 若指定布局，则按布局出图：纸张取布局幅面、内容经布局视口变换，
 ## 并连同图框与标题栏一起输出 —— 这才是真正的"所见即所得"出图。
 var layout: CadLayout = null
+## 视口裁剪矩形（PDF 用户单位/磅）。出图时每个视口只应画出自己那一块，
+## 否则 1:10 的节点详图里会连带出现整张平面图。
+var _clip_pt := Rect2()
+var _clip_on := false
 ## 出图比例（1:100 记 100）。模型毫米 / 该比例 = 图纸毫米。
 var plot_scale := 100.0
 ## 模型空间 -> 图纸空间的自适应缩放（内容超出纸张时自动缩小）
@@ -194,7 +198,13 @@ func _emit_entity_in_view(doc: CadDocument, e: CadEntity, l: CadLayer,
 	#   缩放 = 1/scale，偏移 = 视口中心 - model_center/scale
 	_page_scale = 1.0 / maxf(vp.scale, 1.0e-9)
 	_page_offset = vp.paper_rect.position + vp.paper_rect.size * 0.5 - vp.model_center * _page_scale
+	# 视口边界即裁剪边界
+	var r0 := vp.paper_rect.position * MM2PT
+	var r1 := (vp.paper_rect.position + vp.paper_rect.size) * MM2PT
+	_clip_pt = Rect2(r0, Vector2.ZERO).merge(Rect2(r1, Vector2.ZERO))
+	_clip_on = true
 	_emit_entity(doc, e, l, out)
+	_clip_on = false
 	_page_scale = saved_scale
 	_page_offset = saved
 
@@ -211,7 +221,7 @@ func _emit_entity(doc: CadDocument, e: CadEntity, l: CadLayer, out: PackedByteAr
 	# 实心填充
 	if e is EntHatch and (e as EntHatch).is_solid():
 		var ring := (e as EntHatch).boundary_closed()
-		if ring.size() >= 3:
+		if ring.size() >= 3 and not _ring_outside_clip(ring):
 			out.append_array(_bytes("q %.4f %.4f %.4f rg\n" % [color.r, color.g, color.b]))
 			_path(out, ring, true)
 			out.append_array(_bytes("f\nQ\n"))
@@ -248,10 +258,41 @@ func _sagitta(c: GeoCurve) -> float:
 	return maxf(maxf(bb.size.x, bb.size.y) * 1.0e-4, 0.05)
 
 
+## 线段对矩形裁剪（Liang-Barsky）。返回空数组表示完全在矩形外。
+## 视口出图必须裁剪，否则视口外的模型会画到图纸的其他区域上。
+static func _clip_seg(a: Vector2, b: Vector2, r: Rect2) -> PackedVector2Array:
+	var dx := b.x - a.x
+	var dy := b.y - a.y
+	var t0 := 0.0
+	var t1 := 1.0
+	var p := PackedFloat64Array([-dx, dx, -dy, dy])
+	var q := PackedFloat64Array([a.x - r.position.x, r.position.x + r.size.x - a.x,
+		a.y - r.position.y, r.position.y + r.size.y - a.y])
+	for i in range(4):
+		if absf(p[i]) <= 1.0e-12:
+			if q[i] < 0.0:
+				return PackedVector2Array()
+		else:
+			var t := q[i] / p[i]
+			if p[i] < 0.0:
+				t0 = maxf(t0, t)
+			else:
+				t1 = minf(t1, t)
+	if t0 > t1:
+		return PackedVector2Array()
+	return PackedVector2Array([a + Vector2(dx, dy) * t0, a + Vector2(dx, dy) * t1])
+
+
 func _stroke_line(out: PackedByteArray, color: Color, lw: float, dash: String,
 		a: Vector2, b: Vector2, _first: bool) -> void:
 	var pa := _pt(a)
 	var pb := _pt(b)
+	if _clip_on:
+		var seg := _clip_seg(pa, pb, _clip_pt)
+		if seg.size() < 2:
+			return
+		pa = seg[0]
+		pb = seg[1]
 	out.append_array(_bytes("q %.4f %.4f %.4f RG %.4f w%s\n" % [color.r, color.g, color.b, lw, dash]))
 	out.append_array(_bytes("%.3f %.3f m %.3f %.3f l S\nQ\n" % [pa.x, pa.y, pb.x, pb.y]))
 
@@ -259,6 +300,14 @@ func _stroke_line(out: PackedByteArray, color: Color, lw: float, dash: String,
 func _stroke_poly(out: PackedByteArray, color: Color, lw: float, dash: String,
 		pts: PackedVector2Array, closed: bool, _first: bool) -> void:
 	if pts.size() < 2:
+		return
+	# 开启裁剪时逐段裁剪并单独成路径：折线在矩形边界处会被切成若干段，
+	# 单条路径无法表达，故放弃折线合并以换取正确性。
+	if _clip_on:
+		var n := pts.size()
+		var limit := n if closed else n - 1
+		for i in range(limit):
+			_stroke_line(out, color, lw, dash, pts[i], pts[(i + 1) % n], false)
 		return
 	out.append_array(_bytes("q %.4f %.4f %.4f RG %.4f w%s\n" % [color.r, color.g, color.b, lw, dash]))
 	var p0 := _pt(pts[0])
@@ -305,6 +354,12 @@ func _emit_text(doc: CadDocument, e: CadEntity, color: Color, a: Dictionary,
 	if txt == "":
 		return
 	var pos: Vector2 = a.get("position", Vector2.ZERO)
+	# 文字也要按视口裁剪。几何裁了、文字没裁的话，
+	# 1:10 的节点详图里会印出整张平面图的房间名与表格文字 ——
+	# 文字在 PDF 里是独立对象，不会跟着路径裁剪走。
+	# 做法是整条跳过（不做字形级裁剪）：视口边界的半个字通常无意义。
+	if _clip_on and not _clip_pt.grow(200.0).has_point(_pt(pos)):
+		return
 	var h := float(a.get("height", 3.5))
 	var rot := float(a.get("rotation", 0.0))
 	var h_align := int(a.get("h_align", EntText.HAlign.LEFT))
@@ -502,3 +557,13 @@ func save(doc: CadDocument, path: String) -> Error:
 	f.store_buffer(data)
 	f.close()
 	return OK
+
+
+## 轮廓是否完全落在裁剪矩形之外（完全在外就整块跳过，避免画到图纸别处）
+func _ring_outside_clip(ring: PackedVector2Array) -> bool:
+	if not _clip_on:
+		return false
+	for p in ring:
+		if _clip_pt.has_point(_pt(p)):
+			return false
+	return true
