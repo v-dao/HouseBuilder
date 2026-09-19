@@ -15,6 +15,9 @@
 # 工具状态
 /.zcode/
 
+# 临时补丁脚本（用完即删，不应入库）
+/tools_patch*.py
+
 # 编辑器 / 系统
 .vscode/
 .idea/
