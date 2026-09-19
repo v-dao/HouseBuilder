@@ -17,6 +17,7 @@ func run() -> void:
 	_test_cache_keeps_aux()
 	_test_cache_invalidation()
 	_test_cache_equivalence()
+	_test_buckets_are_model_space()
 
 
 ## 需要一个真实（哪怕是 dummy）的渲染环境来承载 CanvasItem
@@ -170,3 +171,75 @@ func _test_cache_equivalence() -> void:
 	ok(int(r1.stats.get("segments", 0)) == seg1, "回到原缩放后线段数应与首次一致")
 	ci1.queue_free()
 	ci2.queue_free()
+
+
+## 分桶里的点必须是**模型坐标**，且与视图完全无关。
+##
+## 曾经的缺陷：连续线型的图元走了一条名为 emit_screen_segments 的快捷路径，
+## 它在入桶前顺手把坐标变换到了屏幕空间，而 _flush 提交时又变换一次。
+## 于是这些图元被二次变换，位置随缩放漂移 —— 用户看到的现象是
+## "客厅处的黄线会跟随缩放改变位置"（尺寸标注正好是连续线型，
+## 它的尺寸数字走文字通道、位置是对的，只有线在乱跑，所以格外扎眼）。
+##
+## 这条测试用的是**缩放/平移不变性**，而不是比对某个魔法数字：
+## 只要几何与视图有关，两帧的桶内容就一定对不上。
+func _test_buckets_are_model_space() -> void:
+	# 图元故意放在离原点几万毫米的地方：一旦有谁把屏幕坐标（几百量级）
+	# 写进桶里，两者相差两个数量级，一眼可辨。
+	var doc := CadDocument.new()
+	doc.add_entity(EntLine.make(Vector2(50000, 40000), Vector2(52000, 40000)), false)
+	doc.add_entity(EntLine.make(Vector2(50000, 39500), Vector2(52000, 39500)), false)
+	var ring := PackedVector2Array([
+		Vector2(50000, 40000), Vector2(50800, 40000),
+		Vector2(50800, 40500), Vector2(50000, 40500)])
+	doc.add_entity(EntPolyline.make(ring, PackedFloat64Array(), true), false)
+
+	var view := ViewTransform.new()
+	view.set_view_size(Vector2(800, 600))
+	view.center = Vector2(51000, 40000)
+	view.zoom = 0.05
+	var r := CadRenderer.new()
+	var ci := _make_canvas()
+
+	r.draw(doc, view, ci)
+	var a := _bucket_snapshot(r)
+	ok(not a.is_empty(), "应有几何入桶")
+
+	# 1) 桶内的点必须落在图元所在的模型区域附近
+	var stray := 0
+	for key in r.bucket_points().keys():
+		for p in (r.bucket_points()[key] as PackedVector2Array):
+			if absf(p.x - 51000.0) > 5000.0 or absf(p.y - 40000.0) > 5000.0:
+				stray += 1
+	ok(stray == 0,
+		"分桶里必须是模型坐标（约 5 万量级），发现 %d 个疑似屏幕坐标的点" % stray)
+
+	# 2) 换缩放与平移重画，桶内几何必须一字不差。
+	#    本测试只用直线和无凸度的多段线：圆弧的细分密度本就随缩放变化，
+	#    那是合法差异，混进来会掩盖真正的问题。
+	view.zoom *= 2.0
+	view.center += Vector2(300.0, -200.0)
+	r.draw(doc, view, ci)
+	var b := _bucket_snapshot(r)
+	ok(a == b, "换缩放/平移后桶内几何必须完全相同（几何只与文档有关）")
+	if a != b:
+		ok(false, "低倍 %s" % str(a))
+		ok(false, "高倍 %s" % str(b))
+	ci.queue_free()
+
+
+## 把分桶内容压成可比较的字符串数组（按键排序，避免字典顺序影响结果）
+func _bucket_snapshot(r: CadRenderer) -> Array:
+	var out: Array = []
+	var keys: Array = r.bucket_points().keys()
+	keys.sort()
+	for k in keys:
+		var pts: PackedVector2Array = r.bucket_points()[k]
+		if pts.is_empty():
+			continue
+		var s := "%d:" % int(k)
+		for p in pts:
+			s += "(%.4f,%.4f)" % [p.x, p.y]
+		out.append(s)
+	out.sort()
+	return out

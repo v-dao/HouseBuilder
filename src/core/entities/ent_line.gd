@@ -22,10 +22,11 @@ func _build_curves() -> Array[GeoCurve]:
 	return [GeoSeg.make(p0, p1)]
 
 
-## 直线是最常见的图元，覆写以消除每帧的临时数组分配
-func emit_screen_segments(xf: Transform2D, out: PackedVector2Array, _sagitta: float) -> void:
-	out.append(xf * p0)
-	out.append(xf * p1)
+## 直线是最常见的图元，覆写以消除每帧的临时数组分配。
+## 入桶的是模型坐标（与分桶约定一致），不做屏幕变换。
+func emit_segments(out: PackedVector2Array, _sagitta: float) -> void:
+	out.append(p0)
+	out.append(p1)
 
 
 func get_grips() -> PackedVector2Array:

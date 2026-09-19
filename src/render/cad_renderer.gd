@@ -164,7 +164,7 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 		# 块引用：块内图元可能各有图层与颜色（随块 BYBLOCK），
 		# 不能整体当一个颜色画，必须逐个解析
 		if e.type == CadEntity.Type.INSERT:
-			_emit_insert(doc, view, e as EntInsert, xf, sag)
+			_emit_insert(doc, view, e as EntInsert, sag)
 			drawn += 1
 			continue
 
@@ -186,17 +186,18 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 				lt = doc.get_linetype(doc.resolve_linetype(e))
 			if lt == null or lt.is_continuous():
 				var before := bucket.size()
-				e.emit_screen_segments(xf, bucket, sag)
+				# 注意：这里只入模型坐标，屏幕变换在 _flush 里统一做一次
+				e.emit_segments(bucket, sag)
 				_seg_count += (bucket.size() - before) / 2
 			else:
 				for c in e.get_curves():
-					_emit_curve(doc, bucket, c, lt, e.linetype_scale, xf, sag, view.zoom)
+					_emit_curve(doc, bucket, c, lt, e.linetype_scale, sag, view.zoom)
 		drawn += 1
 
 	# 墙体并集轮廓：必须在普通图元之前入桶，使墙线压在被填充的构件之下。
 	# 并集按文档 revision 缓存，文档不变时不重算。
 	if wall_count > 0:
-		_emit_walls(doc, xf)
+		_emit_walls(doc)
 	_flush(ci, xf)
 	_draw_points(doc, view, ci)
 	var texts_drawn := _draw_texts(doc, view, ci)
@@ -279,6 +280,13 @@ func _layer_info(doc: CadDocument, layer: String) -> Dictionary:
 # 分桶
 # ---------------------------------------------------------------------------
 
+## 分桶内容（测试与调试用）。
+## 契约：桶里的点一律是**模型坐标**，只与文档有关、与视图无关。
+## 谁要是往桶里写了屏幕坐标，这里一比就能立刻暴露。
+func bucket_points() -> Dictionary:
+	return _bucket_pts
+
+
 ## 线宽量化到 0.25px 档位，避免浮点微差产生大量几乎相同的桶
 func _width_index(width_px: float) -> int:
 	return int(roundf(clampf(width_px, 0.0, 63.75) * 4.0))
@@ -343,11 +351,11 @@ func _resolve_width(doc: CadDocument, e: CadEntity) -> float:
 # 曲线展开
 # ---------------------------------------------------------------------------
 
+## 本函数**只接受模型空间的曲线**，往桶里写的也是模型坐标。
+## 刻意不接受 Transform2D：一旦能拿到视图变换，就会被误用成"顺手变换一下"，
+## 而分桶约定是模型坐标，变换只允许在 _flush 里发生一次。
 func _emit_curve(doc: CadDocument, bucket: PackedVector2Array, c: GeoCurve,
-		lt: CadLinetype, lt_scale: float, _xf: Transform2D, sag: float, zoom: float) -> void:
-	# 注意：本函数只往桶里写**模型坐标**，不再做屏幕变换。
-	# 变换在 _flush 里一次性完成，这是性能的关键 ——
-	# 逐图元做 GDScript 变换是原先每帧上百毫秒的根源。
+		lt: CadLinetype, lt_scale: float, sag: float, zoom: float) -> void:
 	if _overflow:
 		return
 	var poly := c.tessellate(sag)
@@ -479,7 +487,7 @@ func _append_dashed(out: PackedVector2Array, pts: PackedVector2Array,
 
 ## 把墙体并集轮廓输出为线段。
 ## 每个多边形既画外轮廓也画洞（内环）的轮廓，才能正确表现带天井的平面。
-func _emit_walls(doc: CadDocument, view_xf: Transform2D) -> void:
+func _emit_walls(doc: CadDocument) -> void:
 	var outlines := WallUnion.outline(doc)
 	if outlines.is_empty():
 		return
@@ -496,15 +504,15 @@ func _emit_walls(doc: CadDocument, view_xf: Transform2D) -> void:
 		var pts: PackedVector2Array = poly
 		if pts.size() < 3:
 			continue
-		var _unused := view_xf
 		for i in range(pts.size()):
 			_push_seg(bucket, pts[i], pts[(i + 1) % pts.size()])
 		_seg_count += pts.size()
 
 
 ## 展开块引用：把块内图元按插入变换落到模型空间，逐个解析颜色后入桶。
+## 不接收视图变换：块几何只需落到模型空间，屏幕变换留给 _flush。
 func _emit_insert(doc: CadDocument, view: ViewTransform, ins: EntInsert,
-		view_xf: Transform2D, sag: float) -> void:
+		sag: float) -> void:
 	var blk := ins.get_block()
 	if blk == null:
 		return
@@ -522,7 +530,7 @@ func _emit_insert(doc: CadDocument, view: ViewTransform, ins: EntInsert,
 			var t := c.transformed(ins_xf)
 			if t == null:
 				continue
-			_emit_curve(doc, bucket, t, lt, be.linetype_scale, view_xf, sag, view.zoom)
+			_emit_curve(doc, bucket, t, lt, be.linetype_scale, sag, view.zoom)
 
 
 ## 解析块内图元的颜色。aci == 0 表示随块（BYBLOCK），取引用自身的颜色。
@@ -588,12 +596,11 @@ func hit_grip(view: ViewTransform, sel: Array[CadEntity], screen_pos: Vector2,
 
 ## 收集实心填充的轮廓。实心填充必须在所有线之前绘制，
 ## 否则后画的填充会盖住先画的墙线。
-func _collect_solid(doc: CadDocument, view: ViewTransform, h: EntHatch) -> void:
+func _collect_solid(doc: CadDocument, _view: ViewTransform, h: EntHatch) -> void:
 	var ring := h.boundary_closed()
 	if ring.size() < 3:
 		return
 	# 存模型坐标，提交时统一变换 —— 与线几何走同一套缓存策略
-	var _unused := view
 	_solid_items.append({"poly": ring, "model": true, "color": doc.resolve_color(h)})
 
 

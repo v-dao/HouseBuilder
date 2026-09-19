@@ -113,18 +113,20 @@ func _build_curves() -> Array[GeoCurve]:
 	return []
 
 
-## 直接把**屏幕空间**的线段追加到 out。
+## 把**模型空间**的线段追加到 out。
 ##
-## 为什么要有这条路径：默认实现要走 tessellate() 生成模型空间点串、
-## 再用 Transform2D 乘出新的数组，每帧为每个图元分配两三个数组。
-## 十万图元下这些分配就是主要开销（实测每帧上百毫秒）。
+## 坐标约定：分桶里的点一律是模型坐标，屏幕变换由渲染器在提交时
+## 用一次 Transform2D 乘法统一完成。本方法**绝不能**自己做变换 ——
+## 否则图元会被变换两次，位置随缩放漂移（曾经的真实缺陷）。
+##
+## 为什么要有这条路径：默认实现要走 tessellate() 生成点串再逐个 append，
 ## 直线等简单图元覆写本方法即可做到零分配。
-func emit_screen_segments(xf: Transform2D, out: PackedVector2Array, sagitta: float) -> void:
+func emit_segments(out: PackedVector2Array, sagitta: float) -> void:
 	for c in get_curves():
 		var pts := c.tessellate(sagitta)
 		for i in range(pts.size() - 1):
-			out.append(xf * pts[i])
-			out.append(xf * pts[i + 1])
+			out.append(pts[i])
+			out.append(pts[i + 1])
 
 
 ## 夹点位置（世界坐标）

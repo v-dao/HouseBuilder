@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/diag_crop.gd" id="1_dc"]
+
+[node name="DiagCrop" type="Node"]
+script = ExtResource("1_dc")
