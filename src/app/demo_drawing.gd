@@ -30,27 +30,17 @@ static func build(doc: CadDocument) -> void:
 		var e := EntLine.make(Vector2(xs[i], -900.0), Vector2(xs[i], 6900.0))
 		_put(e, ax)
 		doc.add_entity(e, false)
-		# 轴号圆圈（直径 8~10mm，取 100mm 适应本图比例）
-		var c := EntCircle.make(Vector2(xs[i], 7200.0), 220.0)
-		_put(c, ax)
-		doc.add_entity(c, false)
-		var t := EntText.make(Vector2(xs[i], 7130.0), str(i + 1), 350.0)
-		t.text_style = "图名_7"
-		t.h_align = EntText.HAlign.CENTER
-		_put(t, ax)
-		doc.add_entity(t, false)
+		# 轴线号：用国标符号图元（细实线圆，直径 10mm）
+		var b := EntSymbols.AxisBubble.make(Vector2(xs[i], 7200.0), str(i + 1))
+		_put(b, ax)
+		doc.add_entity(b, false)
 	for j in range(ys.size()):
 		var e2 := EntLine.make(Vector2(-900.0, ys[j]), Vector2(8700.0, ys[j]))
 		_put(e2, ax)
 		doc.add_entity(e2, false)
-		var c2 := EntCircle.make(Vector2(-1200.0, ys[j]), 220.0)
-		_put(c2, ax)
-		doc.add_entity(c2, false)
-		var t2 := EntText.make(Vector2(-1200.0, ys[j] - 70.0), String.chr(65 + j), 350.0)
-		t2.text_style = "图名_7"
-		t2.h_align = EntText.HAlign.CENTER
-		_put(t2, ax)
-		doc.add_entity(t2, false)
+		var b2 := EntSymbols.AxisBubble.make(Vector2(-1200.0, ys[j]), String.chr(65 + j))
+		_put(b2, ax)
+		doc.add_entity(b2, false)
 
 	# --- 双线墙：外墙 240 厚、内墙 120 厚，用闭合多段线画墙体轮廓 ---
 	var outer := _rect_poly(-120.0, -120.0, 7920.0, 6120.0)
@@ -123,6 +113,9 @@ static func build(doc: CadDocument) -> void:
 	_add_room(doc, txt, Vector2(5940.0, 2300.0), "卧室", "7.3 m²")
 	_add_room(doc, txt, Vector2(1740.0, 4380.0), "厨房", "9.8 m²")
 	_add_room(doc, txt, Vector2(5940.0, 4380.0), "卫生间", "6.6 m²")
+
+	# --- 国标符号示例：集中展示七种符号的画法 ---
+	_add_symbols(doc, dim)
 
 	# --- 图名与比例 ---
 	var title := EntText.make(Vector2(3000.0, -3600.0), "一层平面图  1:100", 700.0)
@@ -299,6 +292,51 @@ static func _add_hatch_legend(doc: CadDocument, hatch_layer: String, txt_layer: 
 	t.h_align = EntText.HAlign.CENTER
 	_put(t, txt_layer)
 	doc.add_entity(t, false)
+
+
+## 七种国标符号的示例。放在图面左下方，便于一眼核对画法。
+static func _add_symbols(doc: CadDocument, dim_layer: String) -> void:
+	var base := Vector2(-6200.0, 4200.0)
+	# 标高符号：室内地坪 ±0.000 与基础底 -1.500
+	for pair in [[Vector2(0, 0), 0.0, "±0.000"], [Vector2(2400, 0), -1500.0, "-1.500"]]:
+		var el := EntSymbols.Elevation.make(base + pair[0], float(pair[1]))
+		_put(el, dim_layer)
+		doc.add_entity(el, false)
+		# 引出到被标注位置的短引线
+		var ln := EntLine.make(base + pair[0] + Vector2(0, 0), base + pair[0] + Vector2(0, -700))
+		_put(ln, dim_layer)
+		doc.add_entity(ln, false)
+
+	# 索引符号：上 3 下 建施-05
+	var idx := EntSymbols.IndexMark.make_index(base + Vector2(0, -2400), "3", "建施-05")
+	_put(idx, dim_layer)
+	doc.add_entity(idx, false)
+
+	# 详图符号：上 3
+	var det := EntSymbols.IndexMark.make_detail(base + Vector2(2400, -2400), "3")
+	_put(det, dim_layer)
+	doc.add_entity(det, false)
+
+	# 剖切符号：沿纵向剖切 1-1，投射方向朝左
+	var sec := EntSymbols.SectionMark.make(Vector2(-5200, -600), Vector2(-5200, 6800), 1, "1")
+	_put(sec, dim_layer)
+	doc.add_entity(sec, false)
+
+	# 引出线 + 折断线 + 波浪线
+	var lead := EntSymbols.Leader.make(PackedVector2Array([
+		base + Vector2(400, -3600), base + Vector2(1200, -4400), base + Vector2(3000, -4400)
+	]), "外墙外保温做法见详图")
+	_put(lead, dim_layer)
+	doc.add_entity(lead, false)
+
+	# 折断线与波浪线放在符号区下方的空位，避免压住平面图
+	var bkl := EntSymbols.BreakLine.make(base + Vector2(0, -5200), base + Vector2(2800, -5200))
+	_put(bkl, dim_layer)
+	doc.add_entity(bkl, false)
+
+	var wavy := EntSymbols.BreakLine.make(base + Vector2(0, -6200), base + Vector2(2800, -6200), true)
+	_put(wavy, dim_layer)
+	doc.add_entity(wavy, false)
 
 
 static func _add_room(doc: CadDocument, layer: String, pos: Vector2, name: String, area: String) -> void:

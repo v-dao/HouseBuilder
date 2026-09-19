@@ -49,6 +49,16 @@ const DEFS := [
 ["DIMBASELINE", ["DBA", "基线标注"], "标注", "基线标注：共用基准，逐层偏移"],
 
 # --- 视图 ---
+	# --- 符号 ---
+	["ELEVATION", ["ELEV", "BG", "标高"], "符号", "标高符号：位置 + 标高值（米或毫米）"],
+	["INDEXMARK", ["IDX", "索引符号"], "符号", "索引符号：位置 + 详图编号 + 图纸编号"],
+	["DETAILMARK", ["DTM", "详图符号"], "符号", "详图符号：位置 + 详图编号"],
+	["SECTIONMARK", ["SEC", "剖切符号"], "符号", "剖切符号：剖切位置线 + 投射方向 + 编号"],
+	["LEADER", ["LE", "引出线"], "符号", "引出线：起点 + 折点 + 文字"],
+	["BREAKLINE", ["BKL", "折断线"], "符号", "折断线：直线折断画成 Z 字形"],
+	["WAVYLINE", ["WAVY", "波浪线"], "符号", "波浪线：曲线折断用"],
+	["AXISBUBBLE", ["AXB", "轴线号"], "符号", "轴线号：位置 + 编号"],
+
 	["ZOOM", ["Z"], "视图", "缩放到图纸范围"],
 	["UNDO", ["U", "撤销"], "视图", "撤销上一步"],
 	["REDO", [], "视图", "重做"],
@@ -197,6 +207,22 @@ static func create(name: String) -> CadCommand:
 			return CmdDim.DimChain.new(false)
 		"DIMBASELINE":
 			return CmdDim.DimChain.new(true)
+		"ELEVATION":
+			return CmdSymbol.Elevation.new()
+		"INDEXMARK":
+			return CmdSymbol.IndexMark.new(false)
+		"DETAILMARK":
+			return CmdSymbol.IndexMark.new(true)
+		"SECTIONMARK":
+			return CmdSymbol.SectionMark.new()
+		"LEADER":
+			return CmdSymbol.Leader.new()
+		"BREAKLINE":
+			return CmdSymbol.BreakLine.new(false)
+		"WAVYLINE":
+			return CmdSymbol.BreakLine.new(true)
+		"AXISBUBBLE":
+			return CmdSymbol.AxisBubble.new()
 	return null
 
 

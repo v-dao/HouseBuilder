@@ -30,6 +30,7 @@ enum Type {
 	SOLID,
 	XLINE,
 	RAY,
+	SYMBOL,
 }
 
 ## 图元所属空间
@@ -76,6 +77,15 @@ func _attach_document(doc: CadDocument) -> void:
 
 func _detach_document() -> void:
 	_doc_ref = null
+
+
+## 出图比例（1:100 返回 100）。
+## 国标里符号与标注的尺寸都以「图纸上的毫米」给出，
+## 因此凡是要画到模型空间的符号元素，都必须乘这个比例。
+## 脱离文档时按 1:100 处理，便于单元测试。
+func plot_scale() -> float:
+	var d := get_document()
+	return d.plot_scale if d != null else 100.0
 
 
 # ---------------------------------------------------------------------------
