@@ -33,13 +33,18 @@
 | 项 | 值 |
 |---|---|
 | 引擎 | Godot **4.7.2 stable**（标准版，非 .NET，故只用 GDScript） |
-| Godot 路径 | `$GODOT` |
+| Godot 路径 | 本机安装的标准版可执行文件，安装后**未加入 PATH**；下文命令统一用 `$GODOT` 指代 |
 | 外部依赖 | **零**。DXF 读写、几何内核全部自研 |
 | 图形 | Vulkan / Forward+，`msaa_2d = 4x` 提供线条抗锯齿 |
 
 ## 运行
 
+以下命令都在**项目根目录**执行（`--path .` 指当前目录），`$GODOT` 换成本机
+Godot 4.7.2 标准版可执行文件的路径：
+
 ```bash
+GODOT=/path/to/Godot_v4.7.2-stable_win64.exe     # 换成本机实际路径
+
 # 首次必须先导入，生成全局类缓存，否则 class_name 全局类不可见
 "$GODOT" --headless --path . --import
 
@@ -88,13 +93,13 @@ git push origin main        # 推送；首次已用 -u 建立跟踪，之后 git
 尤其要写根因与验证方式。这个项目的多数提交是缺陷修复，
 而缺陷的价值几乎全在根因上（例：`6e9b9b2` 二次变换、`2ce453a` 缓存边界划错）。
 
-**提交前必做**：
+**提交前必做**（在项目根目录执行）：
 
 ```bash
 # 单元测试必须全绿
-"...Godot_v4.7.2-stable_win64.exe" --headless --path . --script res://tests/run_tests.gd
+"$GODOT" --headless --path . --script res://tests/run_tests.gd
 # 渲染/字体相关改动，还要跑截图验证并核对那三条回归断言
-"...Godot_v4.7.2-stable_win64.exe" --path . --quit-after 2500 res://tests/capture.tscn
+"$GODOT" --path . --quit-after 2500 res://tests/capture.tscn
 ```
 
 **修缺陷时**：先把缺陷改回去，确认新加的断言真的会失败，再恢复。
