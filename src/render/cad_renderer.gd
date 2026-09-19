@@ -40,6 +40,17 @@ var stats: Dictionary = {}
 var _bucket_pts: Dictionary = {}
 # 分桶元数据：key -> [Color, width_px]
 var _bucket_meta: Dictionary = {}
+## 模型空间几何缓存。
+## 键为「文档版本 + 缩放档位 + 线宽模式 + 线型比例」，命中时跳过整个图元遍历。
+## 值仍是分桶的点串，但点是**模型坐标**。
+##
+## 为什么要这样缓存：原先每帧要为每个图元做可见性/颜色/线宽/线型的解析，
+## 再把点逐个变换到屏幕 —— 十万图元下就是每帧上百万次 GDScript 操作。
+## 改成缓存模型坐标后，每帧只剩「每个桶做一次 C++ 数组变换」，
+## 分桶通常只有几个，于是每帧的 GDScript 工作量与图元数无关。
+var _geo_cache_key: String = ""
+var _geo_valid := false
+
 ## 每帧构建一次的图层解析缓存：
 ## 图层名 -> {visible, color, width, linetype, bucket}
 ## 没有它的话，每个图元都要做四五次字典查找（可见性/颜色/线宽/线型），
@@ -50,6 +61,8 @@ var _point_items: Array = []
 var _solid_items: Array = []
 var _seg_count: int = 0
 var _overflow := false
+## 上次构建几何时的可见图元数，供缓存命中时的统计使用
+var _cached_drawn: int = 0
 ## 点的显示半径（屏幕像素，恒定不随缩放变化）
 var point_size_px: float = 4.0
 
@@ -65,14 +78,12 @@ var grip_size_px: float = 3.5
 ## 主入口。在 CanvasItem 的 _draw() 中调用。
 func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 		selection: Array[CadEntity] = []) -> void:
-	_bucket_pts.clear()
-	_bucket_meta.clear()
-	_layer_cache.clear()
+	# 文字/点/实心填充每帧都要重建，所以在入口就清
 	_text_items.clear()
 	_point_items.clear()
 	_solid_items.clear()
-	_seg_count = 0
-	_overflow = false
+	# 注意：_seg_count / _overflow / _cached_drawn 只在**重建**时清。
+	# 放在这里会让缓存命中时读到被清零的值（统计全部显示 0）。
 
 	var culled := 0
 	var drawn := 0
@@ -80,6 +91,31 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 	var vr := view.visible_rect()
 	var xf := view.transform()
 	var sag := view.sagitta_for_pixels(sagitta_px)
+
+	# 几何缓存命中：图元遍历、颜色解析、圆弧细分全部跳过，
+	# 直接进入下面的分桶提交阶段。
+	var want_key := _geometry_key(doc, view)
+	if _geo_valid and want_key == _geo_cache_key:
+		_flush(ci, xf)
+		var sd0 := _draw_solids(view, ci)
+		var td0 := _draw_texts(doc, view, ci)
+		stats = {
+			"total": doc.entity_count(), "culled": 0, "drawn": _cached_drawn,
+			"segments": _seg_count, "buckets": _bucket_meta.size(),
+			"texts": _text_items.size(), "texts_drawn": td0,
+			"points": _point_items.size(), "solids": sd0,
+			"overflow": _overflow, "cache": "hit",
+		}
+		return
+
+	_geo_cache_key = want_key
+	_geo_valid = true
+	_bucket_pts.clear()
+	_bucket_meta.clear()
+	_layer_cache.clear()
+	_seg_count = 0
+	_overflow = false
+	_cached_drawn = 0
 
 	for e in doc.entities:
 		if not e.visible:
@@ -143,13 +179,14 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 	# 并集按文档 revision 缓存，文档不变时不重算。
 	if wall_count > 0:
 		_emit_walls(doc, xf)
-	_flush(ci)
-	_draw_solids(view, ci)
+	_flush(ci, xf)
 	_draw_points(doc, view, ci)
 	var texts_drawn := _draw_texts(doc, view, ci)
 	if not selection.is_empty():
 		_draw_selection(doc, view, ci, selection)
+	_cached_drawn = drawn
 	stats = {
+		"cache": "build",
 		"total": doc.entity_count(),
 		"culled": culled,
 		"drawn": drawn,
@@ -161,6 +198,17 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 		"solids": _solid_items.size(),
 		"overflow": _overflow,
 	}
+
+
+## 几何缓存的键。缩放按档位量化，避免连续缩放时每帧都重建。
+## 档位取 2 的对数的 1/3 步长（约每 1.26 倍缩放换一档），
+## 兼顾圆弧细分精度与重建频率。
+func _geometry_key(doc: CadDocument, view: ViewTransform) -> String:
+	var z := maxf(view.zoom, 1.0e-9)
+	var bucket := int(round(log(z) / log(2.0) * 3.0))
+	return "%d|%d|%s|%.4f|%s|%.4f" % [
+		doc.revision, bucket, str(show_lineweight),
+		ltscale, str(clip_enabled), sagitta_px]
 
 
 ## 取图层的解析结果，首次访问时构建并缓存
@@ -207,7 +255,9 @@ func _bucket(color: Color, width_px: float) -> PackedVector2Array:
 	return b
 
 
-func _flush(ci: CanvasItem) -> void:
+## 提交分桶。点是模型坐标，这里用一次 Transform2D 乘法（C++ 循环）
+## 把它们整体变换到屏幕空间 —— 这是本渲染器每帧唯一与图元数量相关的开销。
+func _flush(ci: CanvasItem, xf: Transform2D) -> void:
 	for key in _bucket_pts.keys():
 		var pts: PackedVector2Array = _bucket_pts[key]
 		if pts.size() < 2:
@@ -215,7 +265,27 @@ func _flush(ci: CanvasItem) -> void:
 		var meta: Array = _bucket_meta[key]
 		var color: Color = meta[0]
 		var width := maxf(float(meta[1]), min_width_px)
-		ci.draw_multiline(pts, color, width)
+		if clip_enabled:
+			# 图纸空间：需要按视口边界裁剪，走逐段裁剪的慢路径
+			_flush_clipped(ci, xf, pts, color, width)
+		else:
+			ci.draw_multiline(xf * pts, color, width)
+
+
+## 带裁剪的提交路径（图纸空间用）。逐段裁剪无法批量，
+## 但图纸空间只在切换布局与改动时重绘，不在交互热路径上。
+func _flush_clipped(ci: CanvasItem, xf: Transform2D, pts: PackedVector2Array,
+		color: Color, width: float) -> void:
+	var out := PackedVector2Array()
+	for i in range(0, pts.size() - 1, 2):
+		var a := xf * pts[i]
+		var b := xf * pts[i + 1]
+		var seg := _clip_seg_rect(a, b, clip_rect)
+		if seg.size() == 2:
+			out.append(seg[0])
+			out.append(seg[1])
+	if out.size() >= 2:
+		ci.draw_multiline(out, color, width)
 
 
 func _resolve_width(doc: CadDocument, e: CadEntity) -> float:
@@ -233,7 +303,10 @@ func _resolve_width(doc: CadDocument, e: CadEntity) -> float:
 # ---------------------------------------------------------------------------
 
 func _emit_curve(doc: CadDocument, bucket: PackedVector2Array, c: GeoCurve,
-		lt: CadLinetype, lt_scale: float, xf: Transform2D, sag: float, zoom: float) -> void:
+		lt: CadLinetype, lt_scale: float, _xf: Transform2D, sag: float, zoom: float) -> void:
+	# 注意：本函数只往桶里写**模型坐标**，不再做屏幕变换。
+	# 变换在 _flush 里一次性完成，这是性能的关键 ——
+	# 逐图元做 GDScript 变换是原先每帧上百毫秒的根源。
 	if _overflow:
 		return
 	var poly := c.tessellate(sag)
@@ -248,7 +321,8 @@ func _emit_curve(doc: CadDocument, bucket: PackedVector2Array, c: GeoCurve,
 			dashed = false
 
 	if not dashed:
-		_append_segments(bucket, xf * poly, c.is_closed())
+		# 入桶的是**模型坐标**；变换统一在 _flush 里做一次
+		_append_segments(bucket, poly, c.is_closed())
 		return
 
 	# 虚线的切分必须在**模型空间**完成：线型长度是模型 mm，
@@ -260,24 +334,14 @@ func _emit_curve(doc: CadDocument, bucket: PackedVector2Array, c: GeoCurve,
 	var model_pairs := PackedVector2Array()
 	_append_dashed(model_pairs, poly, pattern, c.is_closed())
 	if model_pairs.size() >= 2:
-		var screen_pairs := xf * model_pairs
-		if clip_enabled:
-			for k in range(0, screen_pairs.size() - 1, 2):
-				_push_seg(bucket, screen_pairs[k], screen_pairs[k + 1])
-		else:
-			bucket.append_array(screen_pairs)
+		bucket.append_array(model_pairs)
 
 
-## 线段入桶。开启裁剪时先对屏幕空间的线段做矩形裁剪。
+## 线段入桶（模型坐标）。裁剪不在这里做 ——
+## 裁剪属于屏幕空间的事，统一放到 _flush_clipped 里处理。
 func _push_seg(bucket: PackedVector2Array, a: Vector2, b: Vector2) -> void:
-	if not clip_enabled:
-		bucket.append(a)
-		bucket.append(b)
-		return
-	var r := _clip_seg_rect(a, b, clip_rect)
-	if r.size() == 2:
-		bucket.append(r[0])
-		bucket.append(r[1])
+	bucket.append(a)
+	bucket.append(b)
 
 
 ## 线段对矩形裁剪（Liang-Barsky）
@@ -391,10 +455,10 @@ func _emit_walls(doc: CadDocument, view_xf: Transform2D) -> void:
 		var pts: PackedVector2Array = poly
 		if pts.size() < 3:
 			continue
-		var scr := view_xf * pts
-		for i in range(scr.size()):
-			_push_seg(bucket, scr[i], scr[(i + 1) % scr.size()])
-		_seg_count += scr.size()
+		var _unused := view_xf
+		for i in range(pts.size()):
+			_push_seg(bucket, pts[i], pts[(i + 1) % pts.size()])
+		_seg_count += pts.size()
 
 
 ## 展开块引用：把块内图元按插入变换落到模型空间，逐个解析颜色后入桶。
@@ -487,20 +551,24 @@ func _collect_solid(doc: CadDocument, view: ViewTransform, h: EntHatch) -> void:
 	var ring := h.boundary_closed()
 	if ring.size() < 3:
 		return
-	var scr := PackedVector2Array()
-	var xf := view.transform()
-	for q in ring:
-		scr.append(xf * q)
-	_solid_items.append({"poly": scr, "color": doc.resolve_color(h), "alpha": doc.resolve_color(h).a})
+	# 存模型坐标，提交时统一变换 —— 与线几何走同一套缓存策略
+	var _unused := view
+	_solid_items.append({"poly": ring, "model": true, "color": doc.resolve_color(h)})
 
 
-func _draw_solids(_view: ViewTransform, ci: CanvasItem) -> void:
+func _draw_solids(_view: ViewTransform, ci: CanvasItem) -> int:
+	var n := 0
 	for item in _solid_items:
 		var poly: PackedVector2Array = item["poly"]
 		if poly.size() < 3:
 			continue
 		var col: Color = item["color"]
+		var xf2 := _view.transform() if item.has("model") else Transform2D()
+		if item.has("model"):
+			poly = xf2 * poly
 		ci.draw_colored_polygon(poly, Color(col.r, col.g, col.b, maxf(col.a, 1.0)))
+		n += 1
+	return n
 
 
 func _collect_point(doc: CadDocument, _view: ViewTransform, p: EntPoint) -> void:
