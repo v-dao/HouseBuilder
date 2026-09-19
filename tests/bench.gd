@@ -22,6 +22,7 @@ func _ready() -> void:
 	print("")
 	print("════════════════════════════════════════════════════════════")
 	print("  性能基准（Godot %s，模型单位 mm）" % Engine.get_version_info()["string"])
+	print("  显示器刷新率 %d Hz（渲染一帧受垂直同步与窗口合成影响，只适合同机同配置相对比较）" % int(DisplayServer.screen_get_refresh_rate()))
 	print("════════════════════════════════════════════════════════════")
 
 	for n in SIZES:
@@ -34,7 +35,7 @@ func _ready() -> void:
 	print("说明：")
 	print("  · 拾取/框选的时间是单次操作耗时，CAD 交互要求 < 16ms（一帧）")
 	print("  · 渲染一帧的耗时含视口剔除 + 分桶 + 提交，60fps 的预算是 16.7ms")
-	print("  · 四叉树重建发生在每次文档变更后，故其耗时直接决定编辑手感")
+	print("  · 空间索引按文档版本惰性重建：N 次变更合并成 1 次，批量操作不再×N 倍卡顿")
 	print("════════════════════════════════════════════════════════════")
 	get_tree().quit(0)
 
@@ -53,7 +54,7 @@ func _bench_size(n: int) -> void:
 	var t_add := Time.get_ticks_usec() - t0
 
 	t0 = Time.get_ticks_usec()
-	var index := QuadTree.build(doc.entities, doc.get_bbox())
+	var index := SpatialIndex.build(doc.entities, doc.get_bbox())
 	var t_tree := Time.get_ticks_usec() - t0
 
 	# 拾取：随机点取 200 次取平均
@@ -88,17 +89,30 @@ func _bench_size(n: int) -> void:
 	vp.queue_redraw()
 	await RenderingServer.frame_post_draw
 	var stats: Dictionary = vp.renderer.stats
+
+	# 批量变更是否合并成一次重建：修复前每删一个图元就重建一次
+	# （必须放在 queue_free() 之前测）
+	vp.index_builds = 0
+	var t_batch := Time.get_ticks_usec()
+	for i in range(100):
+		doc.remove_entity(doc.entities[i], false)
+	vp.spatial_index()
+	var t_batch_ms := float(Time.get_ticks_usec() - t_batch) / 1000.0
+	var batch_builds := vp.index_builds
+
 	vp.queue_free()
 	await get_tree().process_frame
 
 	var t_render := _median(t_snaps)
+
 	print("")
 	print("── %d 个图元 ──" % n)
 	print("  建文档        %8.1f ms" % (t_add / 1000.0))
-	print("  四叉树重建    %8.1f ms   （每次编辑后触发）" % (t_tree / 1000.0))
+	print("  空间索引重建  %8.1f ms   （编辑后首次取用索引时触发）" % (t_tree / 1000.0))
 	print("  单次拾取      %8.3f ms" % (t_pick / 1000.0))
 	print("  单次框选      %8.3f ms   （窗口 8000x8000mm）" % (t_cross / 1000.0))
 	print("  渲染一帧      %8.2f ms   （中位数，含剔除与提交）" % (t_render / 1000.0))
+	print("  删100个+建索引 %7.1f ms   （重建 %d 次；修复前为 100 次）" % [t_batch_ms, batch_builds])
 	print("  可见/剔除     %d / %d   线段 %d  批次 %d" % [
 		int(stats.get("drawn", 0)), int(stats.get("culled", 0)),
 		int(stats.get("segments", 0)), int(stats.get("buckets", 0))])

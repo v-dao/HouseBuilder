@@ -39,7 +39,7 @@ func _test_quadtree() -> void:
 		var x := rng.randf_range(0.0, 10000.0)
 		var y := rng.randf_range(0.0, 10000.0)
 		doc.add_entity(EntLine.make(Vector2(x, y), Vector2(x + 500.0, y + 300.0)), false)
-	var q := QuadTree.build(doc.entities, Rect2(0, 0, 10000, 10000))
+	var q := SpatialIndex.build(doc.entities, Rect2(0, 0, 10000, 10000))
 	var st := q.stats()
 	ok(int(st["items"]) == 200, "索引内图元总数应为 200，实际 %d" % int(st["items"]))
 	ok(int(st["nodes"]) >= 1, "索引应至少有一个节点")
@@ -69,7 +69,7 @@ func _test_quadtree_bounds() -> void:
 	var doc := CadDocument.new()
 	for i in range(50):
 		doc.add_entity(EntLine.make(Vector2(float(i) * 100.0, 0), Vector2(float(i) * 100.0, 500.0)), false)
-	var q := QuadTree.build(doc.entities, Rect2(0, 0, 5000, 5000))
+	var q := SpatialIndex.build(doc.entities, Rect2(0, 0, 5000, 5000))
 	# 边界处的图元也必须能被查到（四叉树最容易在这里丢对象）
 	var hit := q.query_rect(Rect2(-1, -1, 2, 2))
 	ok(hit.size() == 1, "位于坐标原点的图元应能被查到，实际 %d" % hit.size())
@@ -92,7 +92,7 @@ func _test_window_vs_crossing() -> void:
 	doc.add_entity(inside, false)
 	doc.add_entity(partial, false)
 	doc.add_entity(outside, false)
-	var q := QuadTree.build(doc.entities, Rect2(0, 0, 2000, 2000))
+	var q := SpatialIndex.build(doc.entities, Rect2(0, 0, 2000, 2000))
 	var box := Rect2(0, 0, 100, 100)
 
 	var win := CadSelection.window_select(doc, q, box)
@@ -115,7 +115,7 @@ func _test_pick_nearest() -> void:
 	var near := EntCircle.make(Vector2(0, 0), 10.0)
 	doc.add_entity(far, false)
 	doc.add_entity(near, false)
-	var q := QuadTree.build(doc.entities, Rect2(-200, -200, 600, 600))
+	var q := SpatialIndex.build(doc.entities, Rect2(-200, -200, 600, 600))
 	# 点在圆附近，应拾取到圆而不是远处的线
 	var e := CadSelection.pick(doc, q, Vector2(10.5, 0), 3.0)
 	ok(e == near, "应拾取到最近的圆")

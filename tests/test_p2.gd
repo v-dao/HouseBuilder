@@ -42,7 +42,7 @@ func _scene() -> Array:
 	doc.add_entity(line, false)
 	doc.add_entity(circ, false)
 	doc.add_entity(vert, false)
-	var q := QuadTree.build(doc.entities, Rect2(-1000, -1000, 5000, 3000))
+	var q := SpatialIndex.build(doc.entities, Rect2(-1000, -1000, 5000, 3000))
 	var view := ViewTransform.new()
 	view.zoom = 1.0
 	view.center = Vector2(1000, 0)
@@ -50,7 +50,7 @@ func _scene() -> Array:
 	return [doc, q, view]
 
 
-func _snap_at(view: ViewTransform, doc: CadDocument, q: QuadTree, p: Vector2, from = null) -> SnapEngine.Result:
+func _snap_at(view: ViewTransform, doc: CadDocument, q: SpatialIndex, p: Vector2, from = null) -> SnapEngine.Result:
 	var eng := SnapEngine.new()
 	# 靶框放大到 20 像素，便于在模型坐标里用较小的偏移量测试
 	eng.aperture_px = 20.0
@@ -64,7 +64,7 @@ func _snap_at(view: ViewTransform, doc: CadDocument, q: QuadTree, p: Vector2, fr
 func _test_endpoint_and_midpoint() -> void:
 	var sc := _scene()
 	var doc: CadDocument = sc[0]
-	var q: QuadTree = sc[1]
+	var q: SpatialIndex = sc[1]
 	var view: ViewTransform = sc[2]
 
 	# 光标略偏离线端点 (0,0)，应吸附到精确端点
@@ -86,7 +86,7 @@ func _test_endpoint_and_midpoint() -> void:
 	var doc2 := CadDocument.new()
 	var l2 := EntLine.make(Vector2(0, 0), Vector2(1000, 0))
 	doc2.add_entity(l2, false)
-	var q2 := QuadTree.build(doc2.entities, Rect2(-500, -500, 2000, 1000))
+	var q2 := SpatialIndex.build(doc2.entities, Rect2(-500, -500, 2000, 1000))
 	var r2 := _snap_at(view, doc2, q2, Vector2(498, 4))
 	ok(r2.type == SnapType.MIDPOINT, "孤立线的中点应识别为中点，实际 %s" % SnapType.name_of(r2.type))
 	vclose(r2.point, Vector2(500, 0), "中点坐标", 1e-6)
@@ -95,7 +95,7 @@ func _test_endpoint_and_midpoint() -> void:
 func _test_center_and_quadrant() -> void:
 	var sc := _scene()
 	var doc: CadDocument = sc[0]
-	var q: QuadTree = sc[1]
+	var q: SpatialIndex = sc[1]
 	var view: ViewTransform = sc[2]
 	# 圆心 (2000,0)
 	var r := _snap_at(view, doc, q, Vector2(2004, 3))
@@ -116,14 +116,14 @@ func _test_center_and_quadrant() -> void:
 func _test_intersection() -> void:
 	var sc := _scene()
 	var doc: CadDocument = sc[0]
-	var q: QuadTree = sc[1]
+	var q: SpatialIndex = sc[1]
 	var view: ViewTransform = sc[2]
 	# 加一条斜线 (0,300)-(600,-100)，它与水平线 y=0 交于 (450,0)，
 	# 而斜线自身的中点是 (300,100)，两者不重合，
 	# 这样才能干净地验证"交点"捕捉本身是否生效。
 	var diag := EntLine.make(Vector2(0, 300), Vector2(600, -100))
 	doc.add_entity(diag, false)
-	var q2 := QuadTree.build(doc.entities, Rect2(-1000, -1000, 5000, 3000))
+	var q2 := SpatialIndex.build(doc.entities, Rect2(-1000, -1000, 5000, 3000))
 	var r := _snap_at(view, doc, q2, Vector2(452, 3))
 	ok(r.hit, "斜线与水平线交点附近应命中")
 	ok(r.type == SnapType.INTERSECTION, "应识别为交点，实际 %s" % SnapType.name_of(r.type))
@@ -133,7 +133,7 @@ func _test_intersection() -> void:
 func _test_perpendicular_and_tangent() -> void:
 	var sc := _scene()
 	var doc: CadDocument = sc[0]
-	var q: QuadTree = sc[1]
+	var q: SpatialIndex = sc[1]
 	var view: ViewTransform = sc[2]
 	# 基点在 (200, 400)，水平线 y=0 上的垂足是 (200, 0)
 	var r := _snap_at(view, doc, q, Vector2(203, 5), Vector2(200, 400))
@@ -166,7 +166,7 @@ func _test_priority() -> void:
 	# 一条短线，光标同时靠近端点、中点、以及最近点
 	var l := EntLine.make(Vector2(0, 0), Vector2(100, 0))
 	doc.add_entity(l, false)
-	var q := QuadTree.build(doc.entities, Rect2(-100, -100, 300, 200))
+	var q := SpatialIndex.build(doc.entities, Rect2(-100, -100, 300, 200))
 	var view := ViewTransform.new()
 	view.zoom = 1.0
 	view.set_view_size(Vector2(1600, 900))
@@ -195,7 +195,7 @@ func _test_priority() -> void:
 func _test_aperture_and_switches() -> void:
 	var sc := _scene()
 	var doc: CadDocument = sc[0]
-	var q: QuadTree = sc[1]
+	var q: SpatialIndex = sc[1]
 	var view: ViewTransform = sc[2]
 	# 远离所有几何的位置不应命中
 	var r := _snap_at(view, doc, q, Vector2(5000, 5000))
@@ -204,7 +204,7 @@ func _test_aperture_and_switches() -> void:
 	# 隐藏图层上的图元不应参与捕捉
 	var l := doc.get_layer("0")
 	l.visible = false
-	var q2 := QuadTree.build(doc.entities, Rect2(-1000, -1000, 5000, 3000))
+	var q2 := SpatialIndex.build(doc.entities, Rect2(-1000, -1000, 5000, 3000))
 	var r2 := _snap_at(view, doc, q2, Vector2(3, -2))
 	ok(not r2.hit, "隐藏图层上的图元不应参与捕捉")
 	l.visible = true
@@ -216,7 +216,7 @@ func _test_aperture_and_switches() -> void:
 
 func _test_ortho() -> void:
 	var doc := CadDocument.new()
-	var q := QuadTree.build(doc.entities, Rect2(-1000, -1000, 2000, 2000))
+	var q := SpatialIndex.build(doc.entities, Rect2(-1000, -1000, 2000, 2000))
 	var view := ViewTransform.new()
 	view.zoom = 1.0
 	view.set_view_size(Vector2(1600, 900))
@@ -238,7 +238,7 @@ func _test_ortho() -> void:
 
 func _test_polar() -> void:
 	var doc := CadDocument.new()
-	var q := QuadTree.build(doc.entities, Rect2(-1000, -1000, 2000, 2000))
+	var q := SpatialIndex.build(doc.entities, Rect2(-1000, -1000, 2000, 2000))
 	var view := ViewTransform.new()
 	view.zoom = 1.0
 	view.set_view_size(Vector2(1600, 900))
@@ -264,7 +264,7 @@ func _test_polar() -> void:
 
 func _test_grid() -> void:
 	var doc := CadDocument.new()
-	var q := QuadTree.build(doc.entities, Rect2(-1000, -1000, 2000, 2000))
+	var q := SpatialIndex.build(doc.entities, Rect2(-1000, -1000, 2000, 2000))
 	var view := ViewTransform.new()
 	view.zoom = 1.0
 	view.set_view_size(Vector2(1600, 900))
@@ -306,7 +306,7 @@ func _test_mask() -> void:
 
 func _empty_scene() -> Array:
 	var doc := CadDocument.new()
-	var q := QuadTree.build(doc.entities, Rect2(-1000, -1000, 4000, 4000))
+	var q := SpatialIndex.build(doc.entities, Rect2(-1000, -1000, 4000, 4000))
 	var view := ViewTransform.new()
 	view.zoom = 1.0
 	view.set_view_size(Vector2(1600, 900))
@@ -335,7 +335,7 @@ func _test_track_acquire() -> void:
 func _test_track_axis() -> void:
 	var sc := _empty_scene()
 	var doc: CadDocument = sc[0]
-	var q: QuadTree = sc[1]
+	var q: SpatialIndex = sc[1]
 	var view: ViewTransform = sc[2]
 	var eng := SnapEngine.new()
 	eng.aperture_px = 20.0
@@ -363,7 +363,7 @@ func _test_track_axis() -> void:
 func _test_track_cross() -> void:
 	var sc := _empty_scene()
 	var doc: CadDocument = sc[0]
-	var q: QuadTree = sc[1]
+	var q: SpatialIndex = sc[1]
 	var view: ViewTransform = sc[2]
 	var eng := SnapEngine.new()
 	eng.aperture_px = 20.0
@@ -382,7 +382,7 @@ func _test_track_cross() -> void:
 func _test_track_priority() -> void:
 	var sc := _scene()
 	var doc: CadDocument = sc[0]
-	var q: QuadTree = sc[1]
+	var q: SpatialIndex = sc[1]
 	var view: ViewTransform = sc[2]
 	var eng := SnapEngine.new()
 	eng.aperture_px = 20.0
@@ -438,7 +438,7 @@ func _test_track_hover() -> void:
 func _test_track_switches() -> void:
 	var sc := _empty_scene()
 	var doc: CadDocument = sc[0]
-	var q: QuadTree = sc[1]
+	var q: SpatialIndex = sc[1]
 	var view: ViewTransform = sc[2]
 	var eng := SnapEngine.new()
 	eng.aperture_px = 20.0

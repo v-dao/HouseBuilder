@@ -39,7 +39,11 @@ var doc: CadDocument = null
 var view: ViewTransform = ViewTransform.new()
 var renderer: CadRenderer = CadRenderer.new()
 var ctx: CommandContext = CommandContext.new()
-var index: QuadTree = null
+var index: SpatialIndex = null
+## 索引对应的文档版本号。与渲染缓存同一套过期判断机制。
+var _index_revision := -1
+## 索引重建次数。供测试与基准观察"合并重建"是否真的生效。
+var index_builds := 0
 var snap: SnapEngine = SnapEngine.new()
 ## 最近一次捕捉结果，用于绘制标记与状态栏显示
 var _last_snap: SnapEngine.Result = null
@@ -76,31 +80,55 @@ func setup(p_doc: CadDocument) -> void:
 	ctx.doc = p_doc
 	ctx.view = view
 	ctx.selection.clear()
+	ctx.index_provider = Callable(self, "spatial_index")
 	active_command = null
 	doc.changed.connect(_on_doc_changed)
-	rebuild_index()
+	# 换文档：旧索引作废，留给第一次用到时再建
+	index = null
+	_index_revision = -1
+	index_builds = 0
 	_on_resized()
 	selection_changed.emit(0)
 	queue_redraw()
 
 
 func _on_doc_changed() -> void:
-	rebuild_index()
+	# 只重绘，不重建索引 —— 索引留到真正被用到时（拾取/框选/捕捉）再建。
+	# 批量操作会连发 N 次本回调（删除/复制/阵列 N 个图元各一次），
+	# 若在这里重建，十万图元下删 5 个图元就要重建 5 次、卡 3.2 秒。
 	queue_redraw()
 
 
-## 重建空间索引。文档变更后调用。
-## 十万级图元下重建约几十毫秒；后续可改为增量更新，当前先保证正确性。
-func rebuild_index() -> void:
+## 取空间索引，按需重建。
+##
+## 过期判断用**文档版本号**（与渲染缓存同一套机制）：任何变更都会 bump 版本，
+## 所以这里拿到的索引一定是最新的；而 N 次连续变更只会触发一次重建 ——
+## 因为中间的变更没人来取索引。
+func spatial_index() -> SpatialIndex:
 	if doc == null:
 		index = null
-		ctx.index = null
-		return
+		_index_revision = -1
+		return null
+	if index != null and _index_revision == doc.revision:
+		return index
+	index = SpatialIndex.build(doc.entities, _index_area())
+	_index_revision = doc.revision
+	index_builds += 1
+	return index
+
+
+## 索引覆盖的区域：图元总包围盒外扩一成。空文档给一个兜底区域。
+func _index_area() -> Rect2:
 	var bb := doc.get_bbox()
 	if doc.entity_count() == 0 or (bb.size.x <= 0.0 and bb.size.y <= 0.0):
 		bb = Rect2(-1000.0, -1000.0, 2000.0, 2000.0)
-	index = QuadTree.build(doc.entities, bb.grow(maxf(bb.size.x, bb.size.y) * 0.1 + 1.0))
-	ctx.index = index
+	return bb.grow(maxf(bb.size.x, bb.size.y) * 0.1 + 1.0)
+
+
+## 强制立刻重建索引。测试与基准用；正常交互走 spatial_index() 的惰性路径。
+func rebuild_index() -> void:
+	_index_revision = -1
+	spatial_index()
 
 
 func _on_resized() -> void:
@@ -133,7 +161,7 @@ func snapped_model(screen_pos: Vector2) -> Vector2:
 	var raw := view.to_model(screen_pos)
 	var from = active_command.points[active_command.points.size() - 1] if (
 			active_command != null and active_command.points.size() > 0) else null
-	var r := snap.resolve(doc, index, view, raw, from)
+	var r := snap.resolve(doc, spatial_index(), view, raw, from)
 	_last_snap = r if r.hit else null
 	if r.hit:
 		_snap_screen = view.to_screen(r.point)
@@ -145,7 +173,7 @@ func _snapped_for_preview() -> Vector2:
 	if active_command == null:
 		return mouse_model
 	var from = active_command.points[active_command.points.size() - 1] if active_command.points.size() > 0 else null
-	var r := snap.resolve(doc, index, view, mouse_model, from)
+	var r := snap.resolve(doc, spatial_index(), view, mouse_model, from)
 	_last_snap = r if r.hit else null
 	if r.hit:
 		_snap_screen = view.to_screen(r.point)
@@ -483,7 +511,7 @@ func _on_button(event: InputEventMouseButton) -> void:
 func _try_edit_text_at(screen_pos: Vector2) -> bool:
 	var m := view.to_model(screen_pos)
 	var tol := view.tolerance_for_pixels(pick_aperture_px)
-	var e := CadSelection.pick(doc, index, m, tol)
+	var e := CadSelection.pick(doc, spatial_index(), m, tol)
 	if e == null or not (e is EntText or e is EntMText):
 		return false
 	start_command(CmdText.TextChange.new(), {"entity": e})
@@ -567,7 +595,7 @@ func _on_right_click() -> void:
 func _apply_pick(screen_pos: Vector2) -> void:
 	var m := view.to_model(screen_pos)
 	var tol := view.tolerance_for_pixels(pick_aperture_px)
-	var e := CadSelection.pick(doc, index, m, tol)
+	var e := CadSelection.pick(doc, spatial_index(), m, tol)
 	if e == null:
 		ctx.selection.clear()
 		selection_changed.emit(0)
@@ -585,9 +613,9 @@ func _apply_box_selection(a: Vector2, b: Vector2) -> void:
 	# 左->右 为窗选（完全在内），右->左 为交叉选（相交即选）
 	var found: Array[CadEntity]
 	if b.x < a.x:
-		found = CadSelection.crossing_select(doc, index, mr)
+		found = CadSelection.crossing_select(doc, spatial_index(), mr)
 	else:
-		found = CadSelection.window_select(doc, index, mr)
+		found = CadSelection.window_select(doc, spatial_index(), mr)
 	# Shift 为从选择集中移除
 	var remove_mode := Input.is_key_pressed(KEY_SHIFT)
 	for e in found:
@@ -688,7 +716,6 @@ func undo() -> bool:
 		return false
 	cancel_command()
 	var ok := doc.undo_last()
-	rebuild_index()
 	queue_redraw()
 	return ok
 
@@ -698,7 +725,6 @@ func redo() -> bool:
 		return false
 	cancel_command()
 	var ok := doc.redo_last()
-	rebuild_index()
 	queue_redraw()
 	return ok
 

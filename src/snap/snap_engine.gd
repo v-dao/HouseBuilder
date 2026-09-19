@@ -96,7 +96,7 @@ func set_type_enabled(t: int, on: bool) -> void:
 ##   view     视图变换，用于把屏幕靶框换算成模型容差
 ##   from     橡皮筋起点（垂足/切点/追踪需要），无则传 none
 ## 返回 Result。
-func resolve(doc: CadDocument, index: QuadTree, view: ViewTransform,
+func resolve(doc: CadDocument, index: SpatialIndex, view: ViewTransform,
 		cursor: Vector2, from: Variant = null) -> Result:
 	var r := Result.new()
 	var has_from := from != null
@@ -149,7 +149,7 @@ func resolve(doc: CadDocument, index: QuadTree, view: ViewTransform,
 # 对象捕捉
 # ---------------------------------------------------------------------------
 
-func _object_snap(doc: CadDocument, index: QuadTree, view: ViewTransform,
+func _object_snap(doc: CadDocument, index: SpatialIndex, view: ViewTransform,
 		cursor: Vector2, from) -> Result:
 	var tol := view.tolerance_for_pixels(aperture_px)
 	var best := Result.new()

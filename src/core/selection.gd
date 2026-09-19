@@ -66,7 +66,7 @@ func center() -> Vector2:
 
 ## 单点拾取：返回容差内最近的图元。
 ## 距离相同时取后加入者（与 CAD「后画的对象在上层」的习惯一致）。
-static func pick(doc: CadDocument, index: QuadTree, p: Vector2, tol: float,
+static func pick(doc: CadDocument, index: SpatialIndex, p: Vector2, tol: float,
 		layer_filter := true) -> CadEntity:
 	var cands := _candidates(doc, index, Rect2(p - Vector2(tol, tol), Vector2(tol, tol) * 2.0))
 	var best: CadEntity = null
@@ -82,7 +82,7 @@ static func pick(doc: CadDocument, index: QuadTree, p: Vector2, tol: float,
 
 
 ## 窗选：图元必须**完全**落在矩形内
-static func window_select(doc: CadDocument, index: QuadTree, r: Rect2) -> Array[CadEntity]:
+static func window_select(doc: CadDocument, index: SpatialIndex, r: Rect2) -> Array[CadEntity]:
 	var out: Array[CadEntity] = []
 	for e in _candidates(doc, index, r):
 		if not _selectable(doc, e):
@@ -93,7 +93,7 @@ static func window_select(doc: CadDocument, index: QuadTree, r: Rect2) -> Array[
 
 
 ## 交叉选：图元只要与矩形**相交**即被选中
-static func crossing_select(doc: CadDocument, index: QuadTree, r: Rect2) -> Array[CadEntity]:
+static func crossing_select(doc: CadDocument, index: SpatialIndex, r: Rect2) -> Array[CadEntity]:
 	var out: Array[CadEntity] = []
 	for e in _candidates(doc, index, r):
 		if not _selectable(doc, e):
@@ -104,7 +104,7 @@ static func crossing_select(doc: CadDocument, index: QuadTree, r: Rect2) -> Arra
 
 
 ## 栅栏选：图元与折线栅栏相交即被选中
-static func fence_select(doc: CadDocument, index: QuadTree, fence: PackedVector2Array) -> Array[CadEntity]:
+static func fence_select(doc: CadDocument, index: SpatialIndex, fence: PackedVector2Array) -> Array[CadEntity]:
 	var out: Array[CadEntity] = []
 	if fence.size() < 2:
 		return out
@@ -119,7 +119,7 @@ static func fence_select(doc: CadDocument, index: QuadTree, fence: PackedVector2
 	return out
 
 
-static func _candidates(doc: CadDocument, index: QuadTree, r: Rect2) -> Array[CadEntity]:
+static func _candidates(doc: CadDocument, index: SpatialIndex, r: Rect2) -> Array[CadEntity]:
 	if index != null:
 		return index.query_rect(r)
 	# 索引不可用时退化为全表扫描

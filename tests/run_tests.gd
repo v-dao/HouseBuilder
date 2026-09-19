@@ -108,6 +108,12 @@ func _initialize() -> void:
 	rt.run()
 	_T.merge(rt)
 
+	# 空间索引与合并重建同样需要一个视口来承载
+	var it := IndexTests.new()
+	it._root = _test_root
+	it.run()
+	_T.merge(it)
+
 	_sync_counts()
 	_print_summary()
 	quit(0 if _T.fail_count == 0 else 1)
