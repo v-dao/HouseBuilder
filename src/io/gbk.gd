@@ -91,3 +91,57 @@ static func encode(s: String) -> PackedByteArray:
 		n += 2
 	out.resize(n)
 	return out
+
+
+# ---------------------------------------------------------------------------
+# 解码（DXF 导入用）
+# ---------------------------------------------------------------------------
+
+static var _rev: Dictionary = {}
+
+
+## 把 GBK 字节解码为字符串。
+## 反向对照表按需构建一次（21791 项），之后是常数时间的字典查询。
+## 遇到无法识别的双字节序列时保留原字节的替代字符，不抛错 ——
+## 导入外部图纸时宁可个别字显示不出来，也不能整张图读不进来。
+static func decode(bytes: PackedByteArray) -> String:
+	_ensure()
+	var out := ""
+	var i := 0
+	while i < bytes.size():
+		var b := bytes[i]
+		if b < 0x80:
+			out += String.chr(b)
+			i += 1
+			continue
+		if i + 1 >= bytes.size():
+			break
+		var code := (b << 8) | bytes[i + 1]
+		i += 2
+		if _rev.is_empty():
+			_build_rev()
+		var cp = _rev.get(code)
+		# 不能写成 out += X if cond else Y —— GDScript 的优先级会把它
+		# 解析成 (out += X) if cond else Y，那是非法语句。
+		if cp != null:
+			out += String.chr(int(cp))
+		else:
+			out += "?"
+	return out
+
+
+static func _build_rev() -> void:
+	_ensure()
+	for i in range(_uni.size()):
+		_rev[_gbk[i]] = _uni[i]
+
+
+## 该字节序列是否像 GBK 编码（用于判定导入文件的中文编码）
+static func looks_like_gbk(bytes: PackedByteArray) -> bool:
+	var hi := 0
+	var total := 0
+	for b in bytes:
+		total += 1
+		if b >= 0x81 and b <= 0xFE:
+			hi += 1
+	return total > 0 and hi > 0

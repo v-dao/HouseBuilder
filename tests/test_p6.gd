@@ -20,6 +20,11 @@ func run() -> void:
 	_test_pdf_text_encoding()
 	_test_ttf_parser()
 
+	suite = "DXF 导入与往返"
+	_test_dxf_roundtrip()
+	_test_dxf_chinese_roundtrip()
+	_test_dxf_import_tolerance()
+
 	suite = "DXF 导出（R12）"
 	_test_dxf_structure()
 	_test_dxf_entities()
@@ -633,3 +638,151 @@ func _pdf_plain_streams(data: PackedByteArray) -> String:
 			out += inflated.get_string_from_utf8()
 		i = e_at + endmarker.size()
 	return out
+
+
+## 导出再读回：图元数量、关键几何、图层、块都应还原
+func _test_dxf_roundtrip() -> void:
+	var src := _dxf_doc()
+	# 补一个中文图层名，验证 GBK 编解码往返
+	# 用 ACI 1（红）建图层：R12 的颜色只能以 ACI 索引承载，没有真彩色，
+	# 因此测试要用与 ACI 一致的观察色，否则是自己给自己造不一致
+	src.layers["外墙"] = CadLayer.make("外墙", Color(1.0, 0.0, 0.0), 1, "CONTINUOUS", 1.0)
+	for e in src.entities:
+		if e is EntLine:
+			e.layer = "外墙"
+			break
+	var data := DxfWriter.new(src).write()
+
+	var dst := CadDocument.new()
+	var r := DxfReader.new()
+	var err := r.read_bytes(dst, data)
+	ok(err == OK, "回读应成功，错误码 %d" % err)
+	ok(dst.entity_count() > 0, "回读后应有图元，实际 %d" % dst.entity_count())
+
+	# 按类型比对：导出时椭圆/样条/填充/标注被打散，
+	# 因此只比对导出时保持原生的那几类
+	var src_hist := {}
+	for e in src.entities:
+		var t := e.type
+		if t in [CadEntity.Type.LINE, CadEntity.Type.CIRCLE, CadEntity.Type.ARC,
+				CadEntity.Type.POINT, CadEntity.Type.TEXT, CadEntity.Type.POLYLINE]:
+			src_hist[t] = int(src_hist.get(t, 0)) + 1
+	for k in src_hist.keys():
+		var n := 0
+		for e in dst.entities:
+			if e.type == k:
+				n += 1
+		ok(n >= int(src_hist[k]), "类型 %d 回读后数量应不少于导出数：%d vs %d" % [k, n, src_hist[k]])
+
+	# 圆的半径必须精确还原
+	var src_r := 0.0
+	for e in src.entities:
+		if e is EntCircle:
+			src_r = (e as EntCircle).radius
+	var dst_r := 0.0
+	for e in dst.entities:
+		if e is EntCircle:
+			dst_r = (e as EntCircle).radius
+	close(dst_r, src_r, "圆的半径往返", 1e-3)
+
+	# 多段线的 bulge 必须保留（圆弧段的命门）
+	var src_b := 0.0
+	for e in src.entities:
+		if e is EntPolyline:
+			var bl := (e as EntPolyline).bulges()
+			if bl.size() > 0:
+				src_b = bl[0]
+	var dst_b := 0.0
+	for e in dst.entities:
+		if e is EntPolyline:
+			var bl2 := (e as EntPolyline).bulges()
+			if bl2.size() > 0 and absf(bl2[0]) > 1.0e-9:
+				dst_b = bl2[0]
+	close(dst_b, src_b, "多段线 bulge 往返（圆弧段不丢）", 1e-6)
+
+	# 图层还原，含中文图层名
+	ok(dst.layers.has("测试层"), "自定义图层应还原")
+	ok(dst.layers.has("外墙"), "中文图层名应还原")
+	var l: CadLayer = dst.layers.get("外墙")
+	if l != null:
+		# 颜色与线型是 R12 图层表能承载的，必须还原
+		ok(l.linetype == "CONTINUOUS", "图层线型往返，实际 %s" % l.linetype)
+		# 颜色经 ACI 索引往返：1 号索引对应纯红
+		ok(l.aci == 1, "图层颜色索引往返，实际 %d" % l.aci)
+		ok(l.color.r > 0.9 and l.color.g < 0.1 and l.color.b < 0.1,
+			"ACI 1 应映射为红色，实际 %s" % str(l.color))
+		# 线宽是 R12 的固有限制：组码 370 直到 R2000 才引入，R12 图层表里没有线宽。
+		# 国内 CAD 的线宽本来就来自打印样式表（.ctb）按图层颜色映射，不存在图里。
+		# 这里刻意不写非 R12 的组码 —— 那正是会让对方打不开文件的做法。
+		ok(l.lineweight == CadLayer.LW_DEFAULT,
+			"R12 不承载图层线宽，应回退为默认值，实际 %s" % str(l.lineweight))
+
+	# 块与块引用
+	ok(dst.blocks.has("M0921"), "块定义应还原")
+	var ins_ok := false
+	for e in dst.entities:
+		if e is EntInsert:
+			var ins := e as EntInsert
+			if dst.get_block(ins.block_name) != null and not ins.get_curves().is_empty():
+				ins_ok = true
+	ok(ins_ok, "块引用应能解析到块定义并展开几何")
+
+	# 线型表
+	ok(dst.linetypes.has("DASHED"), "线型表应还原")
+
+
+## 中文经 GBK 编码再解码后必须完全一致
+func _test_dxf_chinese_roundtrip() -> void:
+	var src := CadDocument.new()
+	var t := EntText.make(Vector2(0, 0), "一层平面图 客厅 卫生间 ±0.000", 250.0)
+	src.add_entity(t, false)
+	var t2 := EntText.make(Vector2(0, 1000), "钢筋混凝土", 250.0)
+	src.add_entity(t2, false)
+	var data := DxfWriter.new(src).write()
+
+	var dst := CadDocument.new()
+	DxfReader.new().read_bytes(dst, data)
+	var texts := []
+	for e in dst.entities:
+		if e is EntText:
+			texts.append((e as EntText).text)
+	ok(texts.size() == 2, "应读回 2 条文字，实际 %d" % texts.size())
+	if texts.size() == 2:
+		ok(String(texts[0]) == "一层平面图 客厅 卫生间 ±0.000",
+			"中文内容应完全一致，实际 %s" % String(texts[0]))
+		ok(String(texts[1]) == "钢筋混凝土", "第二条中文，实际 %s" % String(texts[1]))
+	# GBK 编解码器本身的自洽性
+	var enc := Gbk.encode("一层平面图")
+	var dec := Gbk.decode(enc)
+	ok(dec == "一层平面图", "GBK 编解码往返，实际 %s" % dec)
+	ok(Gbk.decode(Gbk.encode("")) == "", "空串往返")
+	ok(Gbk.decode(Gbk.encode("ABC123")) == "ABC123", "ASCII 往返")
+
+
+## 外部图纸千奇百怪，不能因为个把异常实体就整张读不进来
+func _test_dxf_import_tolerance() -> void:
+	var r := DxfReader.new()
+	var dst := CadDocument.new()
+	# 空文件
+	ok(r.read_bytes(dst, PackedByteArray()) != OK, "空文件应报错而不是崩溃")
+	# 只有段头没有实体的最小文件
+	var minimal := "0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n".to_utf8_buffer()
+	ok(r.read_bytes(dst, minimal) == OK, "最小合法文件应能读入")
+	ok(dst.entity_count() == 0, "最小文件没有图元")
+	# 含未知实体类型：跳过但不失败
+	var with_unknown := ("0\nSECTION\n2\nENTITIES\n"
+		+ "0\n3DFACE\n8\n0\n10\n0\n20\n0\n30\n0\n"
+		+ "0\nLINE\n8\n0\n10\n0\n20\n0\n11\n100\n21\n100\n"
+		+ "0\nENDSEC\n0\nEOF\n").to_utf8_buffer()
+	var r2 := DxfReader.new()
+	var d2 := CadDocument.new()
+	ok(r2.read_bytes(d2, with_unknown) == OK, "含未知实体时仍应成功读入")
+	ok(d2.entity_count() == 1, "未知实体应被跳过，已知实体应读入，实际 %d" % d2.entity_count())
+	ok(r2.warnings.size() > 0, "跳过的实体应产生告警")
+	# 残缺的 LINE（缺终点）不应崩溃
+	var broken := ("0\nSECTION\n2\nENTITIES\n"
+		+ "0\nLINE\n8\n0\n10\n5\n20\n5\n"
+		+ "0\nENDSEC\n0\nEOF\n").to_utf8_buffer()
+	var r3 := DxfReader.new()
+	var d3 := CadDocument.new()
+	ok(r3.read_bytes(d3, broken) == OK, "残缺实体不应导致失败")

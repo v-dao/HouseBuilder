@@ -157,6 +157,7 @@ func _file_menu() -> MenuButton:
 	mb.focus_mode = Control.FOCUS_NONE
 	var pop := mb.get_popup()
 	pop.add_item("打开工程 (Ctrl+O)", 0)
+	pop.add_item("导入 DXF…", 8)
 	pop.add_item("保存 (Ctrl+S)", 1)
 	pop.add_item("另存为…", 2)
 	pop.add_separator()
@@ -190,6 +191,8 @@ func _on_file_menu(id: int) -> void:
 			_open_dialog(FileDialog.FILE_MODE_SAVE_FILE, ["*.png"], "导出 PNG", _do_export_png)
 		7:
 			viewport.run_command("SHEET")
+		8:
+			_open_dialog(FileDialog.FILE_MODE_OPEN_FILE, ["*.dxf"], "导入 DXF", _do_import_dxf)
 
 
 var _current_path: String = ""
@@ -259,6 +262,27 @@ func _do_export_dxf(path: String) -> void:
 	_show_status("已导出 DXF R12：%s（%.1f KB）%s" % [
 		path.get_file(), size / 1024.0,
 		"" if Gbk.is_available() else "  ⚠ GBK 表缺失，中文已写成 ?"])
+
+
+func _do_import_dxf(path: String) -> void:
+	var r := DxfReader.new()
+	var err := r.read_into(doc, path)
+	if err != OK:
+		prompt_label.text = "DXF 导入失败（错误码 %d）：%s" % [err, path]
+		return
+	GbBlocks.install(doc)
+	viewport.setup(doc)
+	viewport.zoom_extents()
+	_refresh_status()
+	var n := doc.entity_count()
+	var detail := ""
+	for k in r.stats.keys():
+		detail += " %s:%d" % [String(k), int(r.stats[k])]
+	_show_status("已导入 DXF：%d 个图元（%s ）%s" % [
+		n, detail.strip_edges(),
+		"" if r.warnings.is_empty() else "  ⚠ %d 条告警" % r.warnings.size()])
+	if not r.warnings.is_empty():
+		print("[DXF 导入告警] ", r.warnings)
 
 
 func _do_export_pdf(path: String) -> void:
