@@ -66,6 +66,13 @@ func cancel() -> void:
 	pass
 
 
+## 命令是否处于"选择对象"阶段。
+## 为真时，绘图区的点击与框选由视口用于构建选择集，
+## 而不会作为点输入交给命令。
+func is_selecting() -> bool:
+	return false
+
+
 ## 当前应显示在命令行与光标附近的提示
 func prompt() -> String:
 	return ""

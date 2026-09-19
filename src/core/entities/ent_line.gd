@@ -40,6 +40,19 @@ func move_grip(index: int, pos: Vector2) -> void:
 	invalidate_bbox()
 
 
+## 拉伸点只有两个端点。夹点里的"中点"是移动整条线的辅助点，不参与拉伸。
+func get_stretch_points() -> PackedVector2Array:
+	return PackedVector2Array([p0, p1])
+
+
+func move_stretch_point(index: int, pos: Vector2) -> void:
+	if index == 0:
+		p0 = pos
+	elif index == 1:
+		p1 = pos
+	invalidate_bbox()
+
+
 func transform_by(xf: Transform2D) -> void:
 	p0 = xf * p0
 	p1 = xf * p1

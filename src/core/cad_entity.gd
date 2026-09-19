@@ -28,6 +28,8 @@ enum Type {
 	LEADER,
 	INSERT,
 	SOLID,
+	XLINE,
+	RAY,
 }
 
 ## 图元所属空间
@@ -69,6 +71,19 @@ func get_curves() -> Array[GeoCurve]:
 ## 夹点位置（世界坐标）
 func get_grips() -> PackedVector2Array:
 	return PackedVector2Array()
+
+
+## STRETCH 用的"可拉伸定义点"。
+## 与夹点的区别：夹点含中点等辅助点，而拉伸只应移动真正的定义点
+## （例如直线的两个端点、多段线的各个顶点）。
+## 默认与夹点一致，图元按需覆写。
+func get_stretch_points() -> PackedVector2Array:
+	return get_grips()
+
+
+## 移动第 i 个可拉伸定义点
+func move_stretch_point(index: int, pos: Vector2) -> void:
+	move_grip(index, pos)
 
 
 ## 拖动第 i 个夹点到新位置

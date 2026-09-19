@@ -116,6 +116,17 @@ func _apply_midpoint_bulge(span_index: int, pos: Vector2) -> void:
 	invalidate_bbox()
 
 
+## 拉伸点就是多段线的各个顶点（不含段中点夹点）
+func get_stretch_points() -> PackedVector2Array:
+	return poly.points.duplicate()
+
+
+func move_stretch_point(index: int, pos: Vector2) -> void:
+	if index >= 0 and index < poly.points.size():
+		poly.points[index] = pos
+		invalidate_bbox()
+
+
 func transform_by(xf: Transform2D) -> void:
 	poly = poly.transformed(xf) as GeoPoly
 	invalidate_bbox()

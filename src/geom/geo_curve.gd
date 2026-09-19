@@ -7,7 +7,7 @@ extends RefCounted
 ## 而不是直接操作实体的原始字段。这样 DXF 读写、偏移、修剪等操作只需实现一次。
 
 ## 曲线类型
-enum Kind { SEG, ARC, POLY }
+enum Kind { SEG, ARC, POLY, ELLIPSE, SPLINE }
 
 
 func kind() -> int:

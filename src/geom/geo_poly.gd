@@ -35,6 +35,11 @@ func kind() -> int:
 	return Kind.POLY
 
 
+## 深拷贝
+func duplicate_poly() -> GeoPoly:
+	return GeoPoly.make(points.duplicate(), bulges.duplicate(), closed)
+
+
 func vertex_count() -> int:
 	return points.size()
 

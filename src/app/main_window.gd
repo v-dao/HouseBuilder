@@ -11,6 +11,7 @@ var prompt_label: Label = null
 var coord_label: Label = null
 var scale_label: Label = null
 var count_label: Label = null
+var sel_label: Label = null
 var stat_label: Label = null
 var grid_check: CheckBox = null
 var lw_check: CheckBox = null
@@ -45,6 +46,10 @@ func _build_ui() -> void:
 	viewport.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	viewport.cursor_moved.connect(_on_cursor_moved)
 	viewport.command_prompt_changed.connect(_on_prompt_changed)
+	viewport.selection_changed.connect(_on_selection_changed)
+	viewport.command_started.connect(func(n: String) -> void:
+		prompt_label.text = CommandRegistry.help_for(n))
+	viewport.command_finished.connect(func() -> void: _refresh_status())
 	root.add_child(viewport)
 
 	root.add_child(_build_command_line())
@@ -63,7 +68,13 @@ func _build_toolbar() -> Control:
 	hb.add_child(_btn("撤销", func() -> void: _do_undo()))
 	hb.add_child(_btn("重做", func() -> void: _do_redo()))
 	hb.add_child(VSeparator.new())
-	hb.add_child(_btn("直线", func() -> void: _run("LINE")))
+	# 绘图/修改菜单由命令注册表生成，注册表里加命令会自动出现在此处
+	hb.add_child(_cmd_menu("绘图", ["绘制"]))
+	hb.add_child(_cmd_menu("修改", ["编辑", "几何编辑"]))
+	hb.add_child(VSeparator.new())
+	hb.add_child(_btn("删除", func() -> void: viewport.delete_selection()))
+	hb.add_child(_btn("全选", func() -> void: viewport.select_all()))
+	hb.add_child(VSeparator.new())
 	hb.add_child(_btn("缩放全图", func() -> void: viewport.zoom_extents()))
 	hb.add_child(VSeparator.new())
 
@@ -100,6 +111,50 @@ func _build_toolbar() -> Control:
 	return panel
 
 
+## 由命令注册表生成分类下拉菜单
+func _cmd_menu(label: String, categories: Array) -> MenuButton:
+	var mb := MenuButton.new()
+	mb.text = label
+	mb.focus_mode = Control.FOCUS_NONE
+	var pop := mb.get_popup()
+	var by_cat := CommandRegistry.by_category()
+	var first := true
+	for cat in categories:
+		if not by_cat.has(cat):
+			continue
+		if not first:
+			pop.add_separator()
+		first = false
+		for item in by_cat[cat]:
+			var cname := String(item[0])
+			var chelp := String(item[1])
+			pop.add_item("%s  %s" % [cname, _alias_suffix(cname)], -1)
+			var idx := pop.item_count - 1
+			pop.set_item_tooltip(idx, chelp)
+			pop.set_item_metadata(idx, cname)
+	pop.id_pressed.connect(func(id: int) -> void:
+		# id 即条目索引，取回元数据里的规范命令名
+		var n := pop.item_count
+		for i in range(n):
+			if pop.get_item_id(i) == id or i == id:
+				var meta = pop.get_item_metadata(i)
+				if meta != null:
+					_run(String(meta))
+				return
+	)
+	return mb
+
+
+## 菜单里显示别名，便于用户记住简写
+func _alias_suffix(cname: String) -> String:
+	for d in CommandRegistry.DEFS:
+		if String(d[0]) == cname:
+			var al: Array = d[1]
+			if al.size() > 0:
+				return "(%s)" % String(al[0])
+	return ""
+
+
 func _build_command_line() -> Control:
 	var panel := PanelContainer.new()
 	var hb := HBoxContainer.new()
@@ -127,6 +182,8 @@ func _build_status_bar() -> Control:
 	hb.add_child(scale_label)
 	count_label = _status_label("图元 0")
 	hb.add_child(count_label)
+	sel_label = _status_label("选中 0")
+	hb.add_child(sel_label)
 
 	prompt_label = _status_label("")
 	prompt_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -208,6 +265,12 @@ func _on_prompt_changed(text: String) -> void:
 		prompt_label.text = text
 
 
+func _on_selection_changed(n: int) -> void:
+	if sel_label != null:
+		sel_label.text = "选中 %d" % n
+	_refresh_status()
+
+
 func _fmt(v: float) -> String:
 	if absf(v) >= 1000.0:
 		return "%.1f" % v
@@ -285,6 +348,12 @@ func _toggle_help() -> void:
 [b]编辑[/b]
   Ctrl+Z       撤销
   Ctrl+Y       重做
+  Delete       删除选中对象
+  Ctrl+A       全选
+  左键拖拽     左到右 = 窗选（完全在内）
+               右到左 = 交叉选（相交即选）
+  Shift+拖拽   从选择集中移除
+  拖动夹点     直接编辑图元几何
 
 [b]命令行的坐标输入[/b]
   100,200      绝对坐标

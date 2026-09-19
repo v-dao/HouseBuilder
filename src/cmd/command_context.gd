@@ -7,8 +7,10 @@ var doc: CadDocument = null
 var view: ViewTransform = null
 ## CadViewport，用于请求重绘与读取界面状态；测试中可为 null
 var viewport = null
-## 当前选择集（P1 引入）
-var selection: Array[CadEntity] = []
+## 当前选择集
+var selection: CadSelection = CadSelection.new()
+## 空间索引，用于快速拾取与框选
+var index: QuadTree = null
 ## 全局设置（捕捉开关等，P2 引入）
 var settings: Dictionary = {}
 

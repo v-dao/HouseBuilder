@@ -36,15 +36,28 @@ var _bucket_pts: Dictionary = {}
 # 分桶元数据：key -> [Color, width_px]
 var _bucket_meta: Dictionary = {}
 var _text_items: Array = []
+var _point_items: Array = []
 var _seg_count: int = 0
 var _overflow := false
+## 点的显示半径（屏幕像素，恒定不随缩放变化）
+var point_size_px: float = 4.0
+
+
+## 选择高亮的颜色
+var highlight_color: Color = Color(0.35, 0.95, 0.65)
+## 夹点的颜色与屏幕尺寸
+var grip_color: Color = Color(0.30, 0.85, 1.0)
+var grip_hot_color: Color = Color(1.0, 0.45, 0.35)
+var grip_size_px: float = 3.5
 
 
 ## 主入口。在 CanvasItem 的 _draw() 中调用。
-func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem) -> void:
+func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
+		selection: Array[CadEntity] = []) -> void:
 	_bucket_pts.clear()
 	_bucket_meta.clear()
 	_text_items.clear()
+	_point_items.clear()
 	_seg_count = 0
 	_overflow = false
 
@@ -64,6 +77,10 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem) -> void:
 			_collect_text(doc, view, e as EntText)
 			drawn += 1
 			continue
+		if e.type == CadEntity.Type.POINT:
+			_collect_point(doc, view, e as EntPoint)
+			drawn += 1
+			continue
 		var color := doc.resolve_color(e)
 		if color.a <= 0.001:
 			continue
@@ -75,7 +92,10 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem) -> void:
 		drawn += 1
 
 	_flush(ci)
+	_draw_points(doc, view, ci)
 	var texts_drawn := _draw_texts(doc, view, ci)
+	if not selection.is_empty():
+		_draw_selection(doc, view, ci, selection)
 	stats = {
 		"total": doc.entity_count(),
 		"culled": culled,
@@ -84,6 +104,7 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem) -> void:
 		"buckets": _bucket_meta.size(),
 		"texts": _text_items.size(),
 		"texts_drawn": texts_drawn,
+		"points": _point_items.size(),
 		"overflow": _overflow,
 	}
 
@@ -232,6 +253,79 @@ func _append_dashed(out: PackedVector2Array, pts: PackedVector2Array,
 # ---------------------------------------------------------------------------
 # 文字
 # ---------------------------------------------------------------------------
+
+## 选择集高亮。单独走一遍绘制，避免污染按颜色分好的批次。
+func _draw_selection(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
+		sel: Array[CadEntity]) -> void:
+	var sag := view.sagitta_for_pixels(sagitta_px)
+	var xf := view.transform()
+	var acc := PackedVector2Array()
+	for e in sel:
+		if not e.visible or not doc.is_layer_visible(e.layer):
+			continue
+		for c in e.get_curves():
+			var pts := xf * c.tessellate(sag)
+			for i in range(pts.size() - 1):
+				acc.append(pts[i])
+				acc.append(pts[i + 1])
+			if c.is_closed() and pts.size() > 2:
+				acc.append(pts[pts.size() - 1])
+				acc.append(pts[0])
+	if acc.size() >= 2:
+		ci.draw_multiline(acc, highlight_color, 2.0)
+	# 点的选中态用高亮十字表示
+	for e in sel:
+		if e.type == CadEntity.Type.POINT:
+			var sp := view.to_screen((e as EntPoint).position)
+			ci.draw_arc(sp, 6.0, 0.0, TAU, 16, highlight_color, 1.5, true)
+
+
+## 绘制选中图元的夹点。hot_index 为当前激活的夹点。
+func draw_grips(view: ViewTransform, ci: CanvasItem, sel: Array[CadEntity],
+		hot_entity: CadEntity = null, hot_index: int = -1) -> void:
+	for e in sel:
+		var pts := e.get_grips()
+		var is_hot_owner := (e == hot_entity)
+		for i in range(pts.size()):
+			var sp := view.to_screen(pts[i])
+			var col := grip_hot_color if (is_hot_owner and i == hot_index) else grip_color
+			var r := grip_size_px
+			ci.draw_rect(Rect2(sp - Vector2(r, r), Vector2(r, r) * 2.0), col, true)
+			ci.draw_rect(Rect2(sp - Vector2(r, r), Vector2(r, r) * 2.0), Color(0.05, 0.05, 0.08), false, 1.0)
+
+
+## 命中测试：返回 { entity, index } 或 null
+func hit_grip(view: ViewTransform, sel: Array[CadEntity], screen_pos: Vector2,
+		aperture_px := 6.0) -> Dictionary:
+	for e in sel:
+		var pts := e.get_grips()
+		for i in range(pts.size()):
+			if view.to_screen(pts[i]).distance_to(screen_pos) <= aperture_px:
+				return {"entity": e, "index": i}
+	return {}
+
+
+func _collect_point(doc: CadDocument, _view: ViewTransform, p: EntPoint) -> void:
+	_point_items.append({"e": p, "color": doc.resolve_color(p)})
+
+
+## 点用"圆 + 十字"表示，屏幕尺寸恒定。
+## 恒定尺寸是刻意的：点作为定位标记，缩小时不能消失、放大时不能糊住图面。
+func _draw_points(_doc: CadDocument, view: ViewTransform, ci: CanvasItem) -> void:
+	if _point_items.is_empty():
+		return
+	var vr := view.visible_rect()
+	var r := point_size_px
+	for item in _point_items:
+		var p: EntPoint = item["e"]
+		if not vr.has_point(p.position):
+			continue
+		var sp := view.to_screen(p.position)
+		var col: Color = item["color"]
+		ci.draw_line(sp - Vector2(r, 0), sp + Vector2(r, 0), col, 1.0, true)
+		ci.draw_line(sp - Vector2(0, r), sp + Vector2(0, r), col, 1.0, true)
+		ci.draw_arc(sp, r * 0.75, 0.0, TAU, 16, col, 1.0, true)
+
 
 func _collect_text(doc: CadDocument, view: ViewTransform, t: EntText) -> void:
 	var size_px := int(roundf(t.height * view.zoom))

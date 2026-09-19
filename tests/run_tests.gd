@@ -8,6 +8,10 @@ var _pass := 0
 var _fail := 0
 var _failures: Array[String] = []
 var _suite := ""
+## 断言工具与计数都在 TestSuite 里，本类只做转发 ——
+## 因为 --script 要求本类 extends SceneTree，GDScript 没有多继承，
+## 无法再继承 TestSuite。
+var _T := TestSuite.new()
 
 
 func _initialize() -> void:
@@ -50,29 +54,43 @@ func _initialize() -> void:
 	_suite = "撤销栈"
 	_test_undo_redo()
 
+	# 模块化测试套件（各自继承 TestSuite）
+	var co := CurveOpsTests.new()
+	co.run()
+	_T.merge(co)
+
+	var p1 := P1Tests.new()
+	p1.run()
+	_T.merge(p1)
+
+	_sync_counts()
 	_print_summary()
-	quit(0 if _fail == 0 else 1)
+	quit(0 if _T.fail_count == 0 else 1)
+
+
+func _sync_counts() -> void:
+	_pass = _T.pass_count
+	_fail = _T.fail_count
+	_failures = _T.failures
 
 
 # ---------------------------------------------------------------------------
-# 断言工具
+# 断言工具（转发给 TestSuite）
 # ---------------------------------------------------------------------------
 
 func _ok(cond: bool, msg: String) -> void:
-	if cond:
-		_pass += 1
-	else:
-		_fail += 1
-		_failures.append("[%s] %s" % [_suite, msg])
+	_T.suite = _suite
+	_T.ok(cond, msg)
 
 
 func _close(a: float, b: float, msg: String, tol := 1.0e-6) -> void:
-	# 注意：GDScript 的 % 格式化不支持 %e，只能用 %f / %s
-	_ok(absf(a - b) <= tol, "%s  (期望 %.9f, 实际 %.9f, 差 %s)" % [msg, b, a, str(absf(a - b))])
+	_T.suite = _suite
+	_T.close(a, b, msg, tol)
 
 
 func _vclose(a: Vector2, b: Vector2, msg: String, tol := 1.0e-6) -> void:
-	_ok(a.distance_to(b) <= tol, "%s  (期望 (%.6f, %.6f), 实际 (%.6f, %.6f))" % [msg, b.x, b.y, a.x, a.y])
+	_T.suite = _suite
+	_T.vclose(a, b, msg, tol)
 
 
 # ---------------------------------------------------------------------------
