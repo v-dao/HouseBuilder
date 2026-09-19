@@ -16,6 +16,10 @@ var stat_label: Label = null
 var grid_check: CheckBox = null
 var lw_check: CheckBox = null
 var cross_check: CheckBox = null
+var osnap_check: CheckBox = null
+var ortho_check: CheckBox = null
+var grid_snap_check: CheckBox = null
+var polar_check: CheckBox = null
 
 
 func _ready() -> void:
@@ -50,6 +54,13 @@ func _build_ui() -> void:
 	viewport.command_started.connect(func(n: String) -> void:
 		prompt_label.text = CommandRegistry.help_for(n))
 	viewport.command_finished.connect(func() -> void: _refresh_status())
+	# F3/F8/F9/F10 在视口里切换状态，界面上的勾选要跟着同步
+	viewport.snap_changed.connect(func() -> void:
+		if osnap_check != null:
+			osnap_check.set_pressed_no_signal(viewport.snap.osnap_enabled)
+			ortho_check.set_pressed_no_signal(viewport.snap.ortho)
+			grid_snap_check.set_pressed_no_signal(viewport.snap.grid_snap)
+			polar_check.set_pressed_no_signal(viewport.snap.polar_enabled))
 	root.add_child(viewport)
 
 	root.add_child(_build_command_line())
@@ -103,12 +114,34 @@ func _build_toolbar() -> Control:
 		viewport.queue_redraw())
 	hb.add_child(lw_check)
 
+	hb.add_child(VSeparator.new())
+	osnap_check = _snap_check("对象捕捉 F3", func(v: bool) -> void: viewport.snap.osnap_enabled = v, true)
+	hb.add_child(osnap_check)
+	ortho_check = _snap_check("正交 F8", func(v: bool) -> void: viewport.snap.ortho = v, false)
+	hb.add_child(ortho_check)
+	grid_snap_check = _snap_check("栅格捕捉 F9", func(v: bool) -> void: viewport.snap.grid_snap = v, false)
+	hb.add_child(grid_snap_check)
+	polar_check = _snap_check("极轴 F10", func(v: bool) -> void: viewport.snap.polar_enabled = v, false)
+	hb.add_child(polar_check)
+
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hb.add_child(spacer)
 
 	hb.add_child(_btn("帮助", func() -> void: _toggle_help()))
 	return panel
+
+
+## 捕捉类开关。点击后同步刷新视口，并按 F 键也能切换状态。
+func _snap_check(label: String, cb: Callable, on: bool) -> CheckBox:
+	var c := CheckBox.new()
+	c.text = label
+	c.focus_mode = Control.FOCUS_NONE
+	c.button_pressed = on
+	c.toggled.connect(func(v: bool) -> void:
+		cb.call(v)
+		viewport.queue_redraw())
+	return c
 
 
 ## 由命令注册表生成分类下拉菜单
@@ -286,9 +319,19 @@ func _refresh_status() -> void:
 	if s.is_empty():
 		stat_label.text = ""
 	else:
-		stat_label.text = "可见 %d / 剔除 %d / 线段 %d / 批 %d" % [
+		var flags := []
+		if viewport.snap.osnap_enabled:
+			flags.append("捕捉")
+		if viewport.snap.ortho:
+			flags.append("正交")
+		if viewport.snap.grid_snap:
+			flags.append("栅格")
+		if viewport.snap.polar_enabled:
+			flags.append("极轴")
+		stat_label.text = "可见 %d/剔除 %d/线段 %d/批 %d  %s" % [
 			int(s.get("drawn", 0)), int(s.get("culled", 0)),
-			int(s.get("segments", 0)), int(s.get("buckets", 0))]
+			int(s.get("segments", 0)), int(s.get("buckets", 0)),
+			("[" + "/".join(flags) + "]") if flags.size() > 0 else ""]
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +397,12 @@ func _toggle_help() -> void:
                右到左 = 交叉选（相交即选）
   Shift+拖拽   从选择集中移除
   拖动夹点     直接编辑图元几何
+
+[b]捕捉与定位[/b]
+  F3           对象捕捉（端点/中点/圆心/象限点/交点/垂足/切点）
+  F8           正交
+  F9           栅格捕捉
+  F10          极轴追踪
 
 [b]命令行的坐标输入[/b]
   100,200      绝对坐标

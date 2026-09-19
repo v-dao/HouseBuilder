@@ -13,6 +13,7 @@ signal command_prompt_changed(text: String)
 signal selection_changed(count: int)
 signal command_started(name: String)
 signal command_finished()
+signal snap_changed()
 
 ## 图纸底色
 var bg_color: Color = Color(0.075, 0.082, 0.098)
@@ -39,6 +40,13 @@ var view: ViewTransform = ViewTransform.new()
 var renderer: CadRenderer = CadRenderer.new()
 var ctx: CommandContext = CommandContext.new()
 var index: QuadTree = null
+var snap: SnapEngine = SnapEngine.new()
+## 最近一次捕捉结果，用于绘制标记与状态栏显示
+var _last_snap: SnapEngine.Result = null
+## 最近的捕捉命中点（屏幕坐标），用于画追踪虚线
+var _snap_screen := Vector2.ZERO
+## 是否正在用捕捉结果（决定要不要画标记）
+var _snap_active := false
 
 var active_command: CadCommand = null
 var _last_command_name: String = ""
@@ -104,6 +112,32 @@ func selection_items() -> Array[CadEntity]:
 	return ctx.selection.items
 
 
+## 把屏幕坐标解析为实际的输入点（经对象捕捉/正交/极轴/栅格处理）。
+## 命令的橡皮筋基点作为追踪参考，使垂足、切点、极轴能正常工作。
+func snapped_model(screen_pos: Vector2) -> Vector2:
+	var raw := view.to_model(screen_pos)
+	var from = active_command.points[active_command.points.size() - 1] if (
+			active_command != null and active_command.points.size() > 0) else null
+	var r := snap.resolve(doc, index, view, raw, from)
+	_last_snap = r if r.hit else null
+	if r.hit:
+		_snap_screen = view.to_screen(r.point)
+	return r.point
+
+
+## 仅用于预览显示，不产生副作用
+func _snapped_for_preview() -> Vector2:
+	if active_command == null:
+		return mouse_model
+	var from = active_command.points[active_command.points.size() - 1] if active_command.points.size() > 0 else null
+	var r := snap.resolve(doc, index, view, mouse_model, from)
+	_last_snap = r if r.hit else null
+	if r.hit:
+		_snap_screen = view.to_screen(r.point)
+		_snap_active = true
+	return r.point
+
+
 # ---------------------------------------------------------------------------
 # 绘制
 # ---------------------------------------------------------------------------
@@ -117,8 +151,15 @@ func _draw() -> void:
 	if doc != null:
 		renderer.ltscale = doc.ltscale
 		renderer.draw(doc, view, self, ctx.selection.items)
+	_snap_active = false
+	var preview_p := mouse_model
 	if active_command != null:
-		active_command.draw_preview(self, view, mouse_model)
+		preview_p = _snapped_for_preview()
+		active_command.draw_preview(self, view, preview_p)
+	# 捕捉标记：只在命令取点或待命状态下显示，便于预览将要落在哪里
+	if _last_snap != null and _last_snap.hit and (_mouse_inside or _snap_active):
+		var origin = view.to_screen(_last_snap.track_from) if _last_snap.has_track else null
+		snap.draw_marker(self, _snap_screen, _last_snap, ThemeDB.fallback_font, origin, _snap_active)
 	# 夹点只在无活动命令时显示（编辑命令进行中会干扰视线）
 	if ctx.selection.size() > 0 and active_command == null:
 		var hot_e: CadEntity = _grip_hit.get("entity")
@@ -317,7 +358,8 @@ func _on_left_down(screen_pos: Vector2) -> void:
 
 	# 2) 命令需要点输入时，按下即取点（CAD 习惯：单击确定一个点）
 	if active_command != null and not active_command.is_selecting():
-		if active_command.on_point(view.to_model(screen_pos)):
+		var sp := snapped_model(screen_pos)
+		if active_command.on_point(sp):
 			_end_command()
 		queue_redraw()
 		return
@@ -556,4 +598,21 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			accept_event()
 		KEY_DELETE:
 			delete_selection()
+			accept_event()
+		KEY_F3:
+			snap.osnap_enabled = not snap.osnap_enabled
+			snap_changed.emit()
+			queue_redraw()
+			accept_event()
+		KEY_F8:
+			snap.ortho = not snap.ortho
+			snap_changed.emit()
+			accept_event()
+		KEY_F9:
+			snap.grid_snap = not snap.grid_snap
+			snap_changed.emit()
+			accept_event()
+		KEY_F10:
+			snap.polar_enabled = not snap.polar_enabled
+			snap_changed.emit()
 			accept_event()
