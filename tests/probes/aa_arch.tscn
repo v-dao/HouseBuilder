@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/aa_arch.gd" id="1_aa"]
+
+[node name="AAArch" type="Node"]
+script = ExtResource("1_aa")

@@ -1,0 +1,296 @@
+extends Control
+## 主窗口。组装界面骨架：工具栏 + 绘图区 + 命令行 + 状态栏。
+##
+## 界面用代码构建而不是 .tscn，原因是布局逻辑（按钮与命令的绑定、
+## 状态联动）本身就是代码，写在同一个文件里比散落在场景文件里更好维护。
+
+var doc: CadDocument = null
+var viewport: CadViewport = null
+var cmd_edit: LineEdit = null
+var prompt_label: Label = null
+var coord_label: Label = null
+var scale_label: Label = null
+var count_label: Label = null
+var stat_label: Label = null
+var grid_check: CheckBox = null
+var lw_check: CheckBox = null
+var cross_check: CheckBox = null
+
+
+func _ready() -> void:
+	_build_ui()
+	new_document()
+	# 首次打开直接给一张示例图，让用户立刻看到软件能画出什么。
+	# "新建" 会回到空白图纸。
+	load_demo()
+	# 预热字形图集（动态字体的图集是延迟生成的）
+	FontManager.instance().warm_up()
+
+
+# ---------------------------------------------------------------------------
+# 界面构建
+# ---------------------------------------------------------------------------
+
+func _build_ui() -> void:
+	set_anchors_preset(Control.PRESET_FULL_RECT)
+	var root := VBoxContainer.new()
+	root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.add_theme_constant_override("separation", 0)
+	add_child(root)
+
+	root.add_child(_build_toolbar())
+
+	viewport = CadViewport.new()
+	viewport.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	viewport.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	viewport.cursor_moved.connect(_on_cursor_moved)
+	viewport.command_prompt_changed.connect(_on_prompt_changed)
+	root.add_child(viewport)
+
+	root.add_child(_build_command_line())
+	root.add_child(_build_status_bar())
+
+
+func _build_toolbar() -> Control:
+	var panel := PanelContainer.new()
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 6)
+	panel.add_child(hb)
+
+	hb.add_child(_btn("新建", func() -> void: new_document()))
+	hb.add_child(_btn("示例图", func() -> void: load_demo()))
+	hb.add_child(VSeparator.new())
+	hb.add_child(_btn("撤销", func() -> void: _do_undo()))
+	hb.add_child(_btn("重做", func() -> void: _do_redo()))
+	hb.add_child(VSeparator.new())
+	hb.add_child(_btn("直线", func() -> void: _run("LINE")))
+	hb.add_child(_btn("缩放全图", func() -> void: viewport.zoom_extents()))
+	hb.add_child(VSeparator.new())
+
+	grid_check = CheckBox.new()
+	grid_check.text = "栅格"
+	grid_check.button_pressed = true
+	grid_check.toggled.connect(func(v: bool) -> void:
+		viewport.show_grid = v
+		viewport.queue_redraw())
+	hb.add_child(grid_check)
+
+	cross_check = CheckBox.new()
+	cross_check.text = "十字光标"
+	cross_check.button_pressed = true
+	cross_check.toggled.connect(func(v: bool) -> void:
+		viewport.show_crosshair = v
+		viewport.queue_redraw())
+	hb.add_child(cross_check)
+
+	lw_check = CheckBox.new()
+	lw_check.text = "显示线宽"
+	lw_check.button_pressed = false
+	lw_check.tooltip_text = "按国标线宽体系显示（1.0 / 0.7 / 0.5 / 0.25 b）"
+	lw_check.toggled.connect(func(v: bool) -> void:
+		viewport.renderer.show_lineweight = v
+		viewport.queue_redraw())
+	hb.add_child(lw_check)
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hb.add_child(spacer)
+
+	hb.add_child(_btn("帮助", func() -> void: _toggle_help()))
+	return panel
+
+
+func _build_command_line() -> Control:
+	var panel := PanelContainer.new()
+	var hb := HBoxContainer.new()
+	panel.add_child(hb)
+	var lbl := Label.new()
+	lbl.text = "命令:"
+	hb.add_child(lbl)
+	cmd_edit = LineEdit.new()
+	cmd_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cmd_edit.placeholder_text = "输入命令（LINE / L / 直线 / U 撤销），回车执行；空回车重复上一条命令"
+	cmd_edit.text_submitted.connect(_on_command_submitted)
+	hb.add_child(cmd_edit)
+	return panel
+
+
+func _build_status_bar() -> Control:
+	var panel := PanelContainer.new()
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 16)
+	panel.add_child(hb)
+
+	coord_label = _status_label("X 0.00  Y 0.00")
+	hb.add_child(coord_label)
+	scale_label = _status_label("1:100")
+	hb.add_child(scale_label)
+	count_label = _status_label("图元 0")
+	hb.add_child(count_label)
+
+	prompt_label = _status_label("")
+	prompt_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hb.add_child(prompt_label)
+
+	stat_label = _status_label("")
+	hb.add_child(stat_label)
+	return panel
+
+
+func _status_label(text: String) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 13)
+	return l
+
+
+func _btn(text: String, cb: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.pressed.connect(cb)
+	return b
+
+
+# ---------------------------------------------------------------------------
+# 文档
+# ---------------------------------------------------------------------------
+
+func new_document() -> void:
+	doc = CadDocument.new()
+	viewport.setup(doc)
+	_refresh_status()
+
+
+func load_demo() -> void:
+	doc = CadDocument.new()
+	doc.begin_transaction("载入示例图")
+	DemoDrawing.build(doc)
+	viewport.setup(doc)
+	viewport.zoom_extents()
+	_refresh_status()
+
+
+# ---------------------------------------------------------------------------
+# 交互回调
+# ---------------------------------------------------------------------------
+
+func _run(name: String) -> void:
+	cmd_edit.text = ""
+	viewport.run_command_by_name(name)
+	_refresh_status()
+
+
+func _do_undo() -> void:
+	viewport.undo()
+	_refresh_status()
+
+
+func _do_redo() -> void:
+	viewport.redo()
+	_refresh_status()
+
+
+func _on_command_submitted(text: String) -> void:
+	var ok := viewport.submit_text(text)
+	if not ok and text.strip_edges() != "":
+		prompt_label.text = "未知命令: %s" % text.strip_edges()
+	cmd_edit.text = ""
+	_refresh_status()
+
+
+func _on_cursor_moved(p: Vector2) -> void:
+	coord_label.text = "X %s  Y %s" % [_fmt(p.x), _fmt(p.y)]
+
+
+func _on_prompt_changed(text: String) -> void:
+	if prompt_label != null:
+		prompt_label.text = text
+
+
+func _fmt(v: float) -> String:
+	if absf(v) >= 1000.0:
+		return "%.1f" % v
+	return "%.2f" % v
+
+
+func _refresh_status() -> void:
+	if doc == null:
+		return
+	count_label.text = "图元 %d" % doc.entity_count()
+	scale_label.text = viewport.view.approx_plot_scale()
+	var s: Dictionary = viewport.renderer.stats
+	if s.is_empty():
+		stat_label.text = ""
+	else:
+		stat_label.text = "可见 %d / 剔除 %d / 线段 %d / 批 %d" % [
+			int(s.get("drawn", 0)), int(s.get("culled", 0)),
+			int(s.get("segments", 0)), int(s.get("buckets", 0))]
+
+
+# ---------------------------------------------------------------------------
+# 快捷键
+# ---------------------------------------------------------------------------
+
+func _shortcut_input(event: InputEvent) -> void:
+	if not (event is InputEventKey) or not event.pressed:
+		return
+	var k := event as InputEventKey
+	if k.ctrl_pressed or k.meta_pressed:
+		match k.keycode:
+			KEY_Z:
+				_do_undo() if not k.shift_pressed else _do_redo()
+				accept_event()
+			KEY_Y:
+				_do_redo()
+				accept_event()
+			KEY_S:
+				viewport.zoom_extents()
+				accept_event()
+			KEY_N:
+				new_document()
+				accept_event()
+		return
+	# 无修饰键：把焦点交给命令行，让用户直接敲命令
+	if k.keycode == KEY_ESCAPE:
+		cmd_edit.grab_focus()
+		cmd_edit.select_all()
+		accept_event()
+
+
+var _help_window: Window = null
+
+
+func _toggle_help() -> void:
+	if _help_window != null and _help_window.visible:
+		_help_window.hide()
+		return
+	if _help_window == null:
+		_help_window = Window.new()
+		_help_window.title = "操作说明"
+		_help_window.size = Vector2i(560, 420)
+		var te := RichTextLabel.new()
+		te.bbcode_enabled = true
+		te.set_anchors_preset(Control.PRESET_FULL_RECT)
+		te.text = """[b]视图操作[/b]
+  滚轮          以光标为中心缩放
+  中键拖动      平移
+  Ctrl+S        缩放到图纸范围
+
+[b]绘图[/b]
+  直线          LINE / L / 直线，或点工具栏"直线"
+  空格 或 回车   结束当前命令；无命令时重复上一条命令
+  Esc          取消当前命令
+
+[b]编辑[/b]
+  Ctrl+Z       撤销
+  Ctrl+Y       重做
+
+[b]命令行的坐标输入[/b]
+  100,200      绝对坐标
+  @50,0        相对上一点
+  @100<30      相对上一点，距离 100 角度 30°
+"""
+		_help_window.add_child(te)
+		add_child(_help_window)
+	_help_window.popup_centered()

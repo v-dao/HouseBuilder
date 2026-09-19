@@ -1,0 +1,23 @@
+# Godot 4 生成物
+.godot/
+/android/
+
+# 导出产物
+/build/
+/export/
+*.exe
+*.pck
+*.zip
+
+# 测试输出（全部为生成物，含 Godot 的 .import 缓存）
+/tests/out/
+
+# 工具状态
+/.zcode/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.tmp
+Thumbs.db
+desktop.ini
