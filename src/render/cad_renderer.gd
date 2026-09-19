@@ -85,6 +85,13 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 			drawn += 1
 			continue
 
+		# 块引用：块内图元可能各有图层与颜色（随块 BYBLOCK），
+		# 不能整体当一个颜色画，必须逐个解析
+		if e.type == CadEntity.Type.INSERT:
+			_emit_insert(doc, view, e as EntInsert, xf, sag)
+			drawn += 1
+			continue
+
 		# 实心填充（剖切墙体等）需要真正填面，不能在线上做文章
 		if e.type == CadEntity.Type.HATCH and (e as EntHatch).is_solid():
 			_collect_solid(doc, view, e as EntHatch)
@@ -264,6 +271,39 @@ func _append_dashed(out: PackedVector2Array, pts: PackedVector2Array,
 # ---------------------------------------------------------------------------
 # 文字
 # ---------------------------------------------------------------------------
+
+## 展开块引用：把块内图元按插入变换落到模型空间，逐个解析颜色后入桶。
+func _emit_insert(doc: CadDocument, view: ViewTransform, ins: EntInsert,
+		view_xf: Transform2D, sag: float) -> void:
+	var blk := ins.get_block()
+	if blk == null:
+		return
+	var ins_xf := ins.insert_transform()
+	for be in blk.entities:
+		if not be.visible:
+			continue
+		var color := _resolve_block_color(doc, be, ins)
+		if color.a <= 0.001:
+			continue
+		var width := _resolve_width(doc, be)
+		var bucket := _bucket(color, width)
+		var lt := doc.get_linetype(doc.resolve_linetype(be))
+		for c in be.get_curves():
+			var t := c.transformed(ins_xf)
+			if t == null:
+				continue
+			_emit_curve(doc, bucket, t, lt, be.linetype_scale, view_xf, sag, view.zoom)
+
+
+## 解析块内图元的颜色。aci == 0 表示随块（BYBLOCK），取引用自身的颜色。
+func _resolve_block_color(doc: CadDocument, be: CadEntity, ins: EntInsert) -> Color:
+	if be.aci == 0:
+		if ins.aci == 0 or ins.aci == 256:
+			var l := doc.get_layer(ins.layer)
+			return l.color if l != null else Color.WHITE
+		return ins.color
+	return doc.resolve_color(be)
+
 
 ## 选择集高亮。单独走一遍绘制，避免污染按颜色分好的批次。
 func _draw_selection(doc: CadDocument, view: ViewTransform, ci: CanvasItem,

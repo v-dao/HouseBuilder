@@ -84,6 +84,7 @@ func _build_toolbar() -> Control:
 	hb.add_child(_cmd_menu("修改", ["编辑", "几何编辑"]))
 	hb.add_child(_cmd_menu("标注", ["标注"]))
 	hb.add_child(_cmd_menu("符号", ["符号"]))
+	hb.add_child(_cmd_menu("块", ["块"]))
 	hb.add_child(VSeparator.new())
 	hb.add_child(_btn("删除", func() -> void: viewport.delete_selection()))
 	hb.add_child(_btn("全选", func() -> void: viewport.select_all()))
@@ -250,12 +251,15 @@ func _btn(text: String, cb: Callable) -> Button:
 
 func new_document() -> void:
 	doc = CadDocument.new()
+	# 每个文档都安装内置建筑图库，插入块时即可选用
+	GbBlocks.install(doc)
 	viewport.setup(doc)
 	_refresh_status()
 
 
 func load_demo() -> void:
 	doc = CadDocument.new()
+	GbBlocks.install(doc)
 	doc.begin_transaction("载入示例图")
 	DemoDrawing.build(doc)
 	viewport.setup(doc)
