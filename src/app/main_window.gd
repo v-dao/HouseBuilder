@@ -15,6 +15,7 @@ var scale_label: Label = null
 var count_label: Label = null
 var prop_panel: PropertyPanel = null
 var layer_panel: LayerPanel = null
+var palette: ToolPalette = null
 var sel_label: Label = null
 var stat_label: Label = null
 var grid_check: CheckBox = null
@@ -162,6 +163,13 @@ func _build_ui() -> void:
 	layer_panel.name = "图层"
 	layer_panel.changed.connect(func() -> void: viewport.queue_redraw())
 	tabs.add_child(layer_panel)
+
+	palette = ToolPalette.new()
+	palette.name = "图库"
+	palette.block_chosen.connect(func(n: String) -> void:
+		# 点图块即进入插入命令并预填块名，用户只需再点插入位置
+		viewport.start_command(CmdBlock.InsertCmd.new(), {"block": n}))
+	tabs.add_child(palette)
 
 	root.add_child(_build_command_line())
 	root.add_child(_build_status_bar())
@@ -562,6 +570,8 @@ func _attach_doc() -> void:
 		viewport.prop_panel_ref = prop_panel
 	if layer_panel != null:
 		layer_panel.setup(doc)
+	if palette != null:
+		palette.setup(doc)
 	_refresh_status()
 
 

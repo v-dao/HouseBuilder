@@ -182,9 +182,15 @@ class InsertCmd extends BlockBase:
 	func help_text() -> String:
 		return "插入块：输入块名（L 列出全部）-> 插入点 -> 比例 -> 旋转角"
 
-	func start(_args: Dictionary) -> void:
+	func start(args := {}) -> void:
 		_begin("插入块")
 		_state = S_NAME
+		# 由工具选项板调用时预填块名，直接进入取点阶段
+		if args.has("block"):
+			var b := String(args["block"])
+			if ctx.doc.blocks.has(b):
+				_name = b
+				_state = S_POS
 		ctx.set_status(prompt())
 
 	func prompt() -> String:

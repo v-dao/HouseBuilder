@@ -20,6 +20,7 @@ const DEFS := [
 	["XLINE", ["XL", "构造线"], "绘制", "构造线：一点 + 方向（双向无限，作辅助线用）"],
 	["HATCH", ["H", "BH", "填充"], "绘制", "图案填充：图例名 + 内部点，或手选边界对象"],
 	["SHEET", ["FRAME", "图框"], "设置", "插入国标图框（含标题栏与会签栏）"],
+	["MODCHECK", ["MC", "模数校验"], "设置", "模数校验：检查选中图元的尺寸是否符合 GB/T 50002"],
 	["BLOCK", ["B", "创建块"], "块", "定义块：选择对象 + 基点 + 块名"],
 	["INSERT", ["I", "DDINSERT", "插入块"], "块", "插入块：块名 + 插入点 + 比例 + 旋转"],
 	["ATTEDIT", ["ATE", "属性编辑"], "块", "编辑属性块各字段的值"],
@@ -279,6 +280,8 @@ static func create(name: String) -> CadCommand:
 			return CmdTables.SheetList.new()
 		"MATLIST":
 			return CmdTables.MaterialTable.new()
+		"MODCHECK":
+			return CmdTables.ModCheck.new()
 	return null
 
 

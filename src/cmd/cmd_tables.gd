@@ -352,3 +352,85 @@ static func _center_text(doc: CadDocument, pos: Vector2, s: String, h: float) ->
 	t.layer = "文字"
 	t.aci = 256
 	doc.add_entity(t, false)
+
+
+# ===========================================================================
+# 模数校验
+# ===========================================================================
+
+class ModCheck extends CadCommand:
+	## 检查选中图元的关键尺寸是否符合 GB/T 50002 的模数或常用尺寸序列。
+	## 目的是在制图阶段就把"3600 配 3610"这类问题暴露出来，
+	## 而不是等到预制件到现场才发现装不上。
+	func cmd_name() -> String:
+		return "MODCHECK"
+
+	func aliases() -> PackedStringArray:
+		return PackedStringArray(["mc", "模数校验"])
+
+	func help_text() -> String:
+		return "模数校验：检查选中图元的关键尺寸是否符合 GB/T 50002（未选则检查全部墙体）"
+
+	func start(_args: Dictionary) -> void:
+		var targets: Array = ctx.selection.items
+		if targets.is_empty():
+			for e in ctx.doc.entities:
+				if e is EntWall:
+					targets.append(e)
+		if targets.is_empty():
+			ctx.set_status("没有可检查的对象（请选中图元，或先画墙体）")
+			return
+		var issues: Array[String] = []
+		var checked := 0
+		for e in targets:
+			if e is EntWall:
+				var w := e as EntWall
+				checked += 1
+				var msg := GbModular.validate_all(w.thickness, "墙厚", GbModular.WALL_THICKNESSES)
+				if msg != "":
+					issues.append(msg)
+				for o in w.openings:
+					var op := o as EntWall.Opening
+					checked += 1
+					var seq := GbModular.WINDOW_WIDTHS if op.is_window else GbModular.DOOR_WIDTHS
+					var label := "窗洞宽" if op.is_window else "门洞宽"
+					var m2 := GbModular.validate_all(op.width, label, seq)
+					if m2 != "":
+						issues.append("%s（%s）" % [m2, op.block_name])
+			elif e is EntLine:
+				# 直线的长度按基本模数 100 检查
+				var l := e as EntLine
+				checked += 1
+				var len := l.length()
+				# 只检查有意义的长度，几毫米的构造线不必苛求
+				if len >= 300.0:
+					var m3 := GbModular.validate(len, "线段长")
+					if m3 != "":
+						issues.append(m3)
+			elif e is EntCircle:
+				checked += 1
+				var c := e as EntCircle
+				if c.radius * 2.0 >= 300.0:
+					var m4 := GbModular.validate(c.radius * 2.0, "圆直径")
+					if m4 != "":
+						issues.append(m4)
+		if issues.is_empty():
+			ctx.set_status("模数校验通过：共检查 %d 项尺寸，均符合 GB/T 50002" % checked)
+		else:
+			# 只报前若干条，避免刷屏；剩余条数一并说明
+			var head := issues.slice(0, 8)
+			var tail := "" if issues.size() <= 8 else "（另有 %d 项）" % (issues.size() - 8)
+			ctx.set_status("模数校验：%d 项中有 %d 项不合模数 —— %s %s" % [
+				checked, issues.size(), "; ".join(head), tail])
+
+	func on_point(_p: Vector2) -> bool:
+		return false
+
+	func on_enter() -> bool:
+		return true
+
+	func cancel() -> void:
+		pass
+
+	func on_mouse_move(_p: Vector2) -> void:
+		pass
