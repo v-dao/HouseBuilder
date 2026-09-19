@@ -2,139 +2,120 @@ class_name DemoDrawing
 extends RefCounted
 ## 示例图纸生成器。
 ##
-## 用途有两个：
-##   1. 新用户首次打开软件时能立刻看到"这软件画出来的图长什么样"
-##   2. 作为渲染管线的验收素材 —— 一张图里覆盖了国标的各种线宽、线型、
-##      图形元素与长仿宋文字，出问题一眼就能看出
-##
-## 内容按 GB/T 50001 的线宽体系组织：
-##   粗实线 b(1.0) 墙体轮廓 / 中粗 0.7b 次要轮廓 / 中实线 0.5b 尺寸符号 /
-##   细实线 0.25b 图例填充 / 细单点长画线 0.25b 定位轴线
+## 这张图完全由**参数化建筑工具**生成，而不是手画线段：
+##   轴网用 AxisGrid（自动编号 + 两道尺寸）
+##   墙体用 EntWall（中心线 + 厚度 + 洞口，墙线随洞口自动断开）
+##   门窗是墙体洞口 + 图库块引用
+##   房间面积由墙体轮廓做布尔运算算出
+## 因此它同时是建筑工具的端到端验收素材。
 
 
-## 构建一张演示用的一层平面图（约 8.4m × 6.0m）
+## 轴距（mm）：两跨 3600 / 4200，两进深 3000 / 3000
+const X_SPANS: Array = [3600.0, 4200.0]
+const Y_SPANS: Array = [3000.0, 3000.0]
+const WALL_OUT := 240.0
+const WALL_IN := 120.0
+
+
 static func build(doc: CadDocument) -> void:
 	_setup_layers(doc)
-	var ax := _layer(doc, "轴线", Color(0.55, 0.62, 0.72), "CENTER", 0.25)
-	var wall := _layer(doc, "墙体", Color(0.95, 0.95, 0.92), "CONTINUOUS", 1.0)
-	var win := _layer(doc, "门窗", Color(0.55, 0.80, 1.0), "CONTINUOUS", 0.7)
-	var dim := _layer(doc, "尺寸标注", Color(1.0, 0.82, 0.35), "CONTINUOUS", 0.5)
-	var hatch := _layer(doc, "图例填充", Color(0.45, 0.48, 0.55), "CONTINUOUS", 0.25)
-	var txt := _layer(doc, "文字", Color(0.85, 0.95, 0.85), "CONTINUOUS", 0.25)
-	var stair := _layer(doc, "楼梯", Color(0.60, 0.85, 0.75), "CONTINUOUS", 0.7)
 
-	# --- 轴网 2 跨 × 2 跨，符合 GB/T 50002 的常用开间进深 ---
-	var xs := [0.0, 3600.0, 7800.0]
-	var ys := [0.0, 3000.0, 6000.0]
-	for i in range(xs.size()):
-		var e := EntLine.make(Vector2(xs[i], -900.0), Vector2(xs[i], 6900.0))
-		_put(e, ax)
-		doc.add_entity(e, false)
-		# 轴线号：用国标符号图元（细实线圆，直径 10mm）
-		var b := EntSymbols.AxisBubble.make(Vector2(xs[i], 7200.0), str(i + 1))
-		_put(b, ax)
-		doc.add_entity(b, false)
-	for j in range(ys.size()):
-		var e2 := EntLine.make(Vector2(-900.0, ys[j]), Vector2(8700.0, ys[j]))
-		_put(e2, ax)
-		doc.add_entity(e2, false)
-		var b2 := EntSymbols.AxisBubble.make(Vector2(-1200.0, ys[j]), String.chr(65 + j))
-		_put(b2, ax)
-		doc.add_entity(b2, false)
+	var xs := AxisGrid.positions_from_spans(X_SPANS)
+	var ys := AxisGrid.positions_from_spans(Y_SPANS)
+	AxisGrid.build(doc, xs, ys, Vector2.ZERO, 900.0, 1200.0, true)
+	var tx := 0.0
+	for s in X_SPANS:
+		tx += float(s)
+	var ty := 0.0
+	for s in Y_SPANS:
+		ty += float(s)
 
-	# --- 双线墙：外墙 240 厚、内墙 120 厚，用闭合多段线画墙体轮廓 ---
-	var outer := _rect_poly(-120.0, -120.0, 7920.0, 6120.0)
-	_add_poly(doc, wall, outer, true)
-	# 内墙：L 形隔墙
-	var inner := GeoPoly.make(PackedVector2Array([
-		Vector2(3600.0 - 60.0, -120.0),
-		Vector2(3600.0 + 60.0, -120.0),
-		Vector2(3600.0 + 60.0, 3000.0),
-		Vector2(3600.0 - 60.0, 3000.0),
-	]), PackedFloat64Array(), true)
-	_add_poly(doc, wall, inner, true)
-	var inner2 := GeoPoly.make(PackedVector2Array([
-		Vector2(-120.0, 3000.0 - 60.0),
-		Vector2(3600.0, 3000.0 - 60.0),
-		Vector2(3600.0, 3000.0 + 60.0),
-		Vector2(-120.0, 3000.0 + 60.0),
-	]), PackedFloat64Array(), true)
-	_add_poly(doc, wall, inner2, true)
+	# --- 外墙：闭合墙体，中心线落在轴线上 ---
+	var ring := EntWall.make(PackedVector2Array([
+		Vector2(0.0, 0.0),
+		Vector2(tx, 0.0),
+		Vector2(tx, ty),
+		Vector2(0.0, ty),
+	]), WALL_OUT, true)
+	_put(ring, "墙体")
+	doc.add_entity(ring, false)
+	# 洞口按沿中心线的弧长定位。闭合环自 (0,0) 逆时针起算：
+	#   下边 0~tx，右边 tx~tx+ty，上边 tx+ty~2tx+ty，左边 2tx+ty~2tx+2ty
+	ring.add_opening(1800.0, 900.0, "M0921", false)                    # 入口门
+	ring.add_opening(6000.0, 1500.0, "C1515", true)                    # 下边窗
+	ring.add_opening(tx + 3000.0, 1200.0, "C1215", true)               # 右边窗
+	ring.add_opening(tx * 2.0 + ty - 1800.0, 1800.0, "C1815", true)    # 上边窗
+	ring.add_opening(tx * 2.0 + ty * 2.0 - 3000.0, 1200.0, "C1215", true)  # 左边窗
 
-	# --- 门扇与开启弧（国标画法：门扇线 + 90° 开启弧）---
-	_add_door(doc, win, Vector2(1800.0, -120.0), 900.0, 0.0, true)
-	_add_door(doc, win, Vector2(3600.0, 1800.0), 800.0, PI * 0.5, false)
+	# --- 内墙：横向分隔（客厅 / 厨房 / 卫生间）---
+	var part_h := EntWall.make(PackedVector2Array([
+		Vector2(0.0, 3000.0), Vector2(tx, 3000.0)]), WALL_IN, false)
+	_put(part_h, "墙体")
+	doc.add_entity(part_h, false)
+	part_h.add_opening(1800.0, 900.0, "M0921", false)
+	part_h.add_opening(5400.0, 900.0, "M0921", false)
 
-	# --- 窗：墙上三条平行细线 ---
-	_add_window(doc, win, -120.0, 1500.0, 0.0, 1500.0, 240.0)
-	_add_window(doc, win, 7920.0, 1200.0, 0.0, 1800.0, 240.0)
+	# --- 内墙：纵向分隔（贯通全高，把上下两层各分成两间）---
+	var part_v := EntWall.make(PackedVector2Array([
+		Vector2(3600.0, 0.0), Vector2(3600.0, ty)]), WALL_IN, false)
+	_put(part_v, "墙体")
+	doc.add_entity(part_v, false)
+	part_v.add_opening(1500.0, 900.0, "M0921", false)   # 客厅 -> 餐厅
+	part_v.add_opening(4500.0, 900.0, "M0921", false)   # 厨房 -> 卫生间
 
-	# --- 楼梯间：第二跨下侧做楼梯间，画双跑楼梯的踏步线 ---
-	# 楼梯间与卧室之间的分隔墙（120 厚）
-	var stair_wall := GeoPoly.make(PackedVector2Array([
-		Vector2(3720.0, 1500.0 - 60.0),
-		Vector2(7800.0, 1500.0 - 60.0),
-		Vector2(7800.0, 1500.0 + 60.0),
-		Vector2(3720.0, 1500.0 + 60.0),
-	]), PackedFloat64Array(), true)
-	_add_poly(doc, wall, stair_wall, true)
-	# 两跑踏步：上行梯段 9 级，踏步宽 260，梯段宽 1100
-	var tread := 260.0
-	var st_x := 3900.0
-	for run in range(2):
-		var y0 := 180.0 + float(run) * 1380.0
-		for i in range(9):
-			var y := y0 + float(i) * tread
-			var e3 := EntLine.make(Vector2(st_x, y), Vector2(st_x + 1100.0, y))
-			_put(e3, stair)
-			doc.add_entity(e3, false)
-		# 梯段分隔线
-		var mid := EntLine.make(Vector2(st_x + 1100.0, y0), Vector2(st_x + 1100.0, y0 + 8.0 * tread))
-		_put(mid, stair)
-		doc.add_entity(mid, false)
+	# --- 门窗块：让门扇与开启弧显示出来 ---
+	for w: EntWall in [ring, part_h, part_v]:
+		for o in w.opening_inserts():
+			var ins := o as EntInsert
+			var blk := doc.get_block(ins.block_name)
+			if blk != null:
+				for a in blk.attribute_defs:
+					var ad: Dictionary = a
+					ins.attributes[String(ad.get("tag", ""))] = String(ad.get("default", ""))
+			ins.layer = "门窗"
+			ins.aci = 256
+			doc.add_entity(ins, false)
 
-	# --- 图例填充：45° 素线。放在图面外的图例框里，
-	#     不压住房间名（GB/T 50001 附录的建筑材料图例画法基础）---
-	_add_hatch_legend(doc, hatch, txt)
+	# --- 房间：面积由墙体轮廓的布尔运算算出，精确到墙体内表面 ---
+	_add_room(doc, Vector2(1800.0, 1500.0), "客厅")
+	_add_room(doc, Vector2(1800.0, 4500.0), "厨房")
+	_add_room(doc, Vector2(5700.0, 4500.0), "卫生间")
+	_add_room(doc, Vector2(5700.0, 1500.0), "餐厅")
 
-	# --- 尺寸标注：按 GB/T 50001 用真实标注图元生成三道尺寸线
-	#     （第一道总尺寸 / 第二道轴线尺寸 / 第三道门窗定位尺寸）---
-	_add_linear_chain(doc, xs, -900.0)
-	_add_linear_chain(doc, [0.0, 7800.0], -1500.0)
-	_add_linear_chain(doc, [-120.0, 7920.0], -2100.0)
-	# 半径标注：给楼梯间的门开启弧加一个半径尺寸，验证引线画法
-	var rdim := EntDim.make_radius(Vector2(3600.0, 1800.0), Vector2(4400.0, 1800.0), Vector2(4900.0, 2100.0))
-	rdim.dim_style_name = doc.current_dim_style
-	_put(rdim, dim)
-	doc.add_entity(rdim, false)
+	# --- 楼梯：参数化插入（放在图面左侧做展示）---
+	var stair := EntInsert.make("双跑楼梯", Vector2(-4600.0, 2400.0))
+	stair.layer = "楼梯"
+	stair.aci = 256
+	doc.add_entity(stair, false)
 
-	# --- 房间名与面积 ---
-	_add_room(doc, txt, Vector2(1740.0, 1440.0), "客厅", "22.2 m²")
-	_add_room(doc, txt, Vector2(5940.0, 2300.0), "卧室", "7.3 m²")
-	_add_room(doc, txt, Vector2(1740.0, 4380.0), "厨房", "9.8 m²")
-	_add_room(doc, txt, Vector2(5940.0, 4380.0), "卫生间", "6.6 m²")
+	# --- 门窗表 ---
+	_add_schedule(doc, Vector2(-7000.0, 1600.0))
 
-	# --- 国标符号示例：集中展示七种符号的画法 ---
-	_add_symbols(doc, dim)
+	# --- 国标符号示例 ---
+	_add_symbols(doc)
 
-	# --- 图名与比例 ---
-	var title := EntText.make(Vector2(3000.0, -3600.0), "一层平面图  1:100", 700.0)
+	# --- 材料图例展示条 ---
+	_add_hatch_legend(doc)
+
+	# --- 图名与说明 ---
+	var title := EntText.make(Vector2(tx * 0.5, -4200.0), "一层平面图  1:100", 700.0)
 	title.text_style = "图名_7"
 	title.h_align = EntText.HAlign.CENTER
-	_put(title, txt)
+	_put(title, "文字")
 	doc.add_entity(title, false)
 
-	var note := EntText.make(Vector2(3000.0, -4500.0), "±0.000  室内地坪  墙体 240 厚烧结普通砖", 350.0)
+	var note := EntText.make(Vector2(tx * 0.5, -5100.0),
+		"±0.000  室内地坪   外墙 240 厚烧结普通砖   门窗洞口尺寸详见门窗表", 350.0)
 	note.text_style = "仿宋_3.5"
 	note.h_align = EntText.HAlign.CENTER
-	_put(note, txt)
+	_put(note, "文字")
 	doc.add_entity(note, false)
 
-	doc.commit_transaction()
 
+# ---------------------------------------------------------------------------
+# 图层
+# ---------------------------------------------------------------------------
 
-## ACI 颜色索引 -> 观察色。国内建筑图按"图层颜色决定打印线宽"的习惯组织，
-## 这里给每个图层配一个便于在深底上区分的观察色，ACI 值同时用于 DXF 往返。
 const LAYER_COLORS := {
 	"轴线": [Color(0.55, 0.62, 0.72), 8],
 	"墙体": [Color(0.95, 0.95, 0.92), 7],
@@ -146,12 +127,11 @@ const LAYER_COLORS := {
 	"家具": [Color(0.70, 0.62, 0.85), 6],
 	"文字": [Color(0.85, 0.95, 0.85), 3],
 	"图框": [Color(0.80, 0.80, 0.85), 7],
+	"设备": [Color(0.75, 0.78, 0.88), 9],
 }
 
 
-## 按 GB/T 50001 的线宽组建立图层。
-## 线宽组由基本线宽 b 生成：b / 0.7b / 0.5b / 0.25b。
-## 1:100 的平面图取 b = 1.0（详见 GbLineweight 的说明）。
+## 按 GB/T 50001 的线宽组建立图层：b / 0.7b / 0.5b / 0.25b
 static func _setup_layers(doc: CadDocument) -> void:
 	var b := GbLineweight.b_for_plot_scale(doc.plot_scale)
 	for row in GbLineweight.default_layer_map():
@@ -164,11 +144,8 @@ static func _setup_layers(doc: CadDocument) -> void:
 		var aci: int = int(entry[1]) if entry != null else 7
 		var w := GbLineweight.width_for(usage, b)
 		doc.layers[name] = CadLayer.make(name, color, aci, linetype, w, desc)
-
-
-static func _layer(doc: CadDocument, name: String, _c: Color, _lt: String, _lw: float) -> String:
-	doc.ensure_layer(name)
-	return name
+	# 设备层（洁具、厨具）单独补上，图例映射表里没有
+	doc.ensure_layer("设备")
 
 
 static func _put(e: CadEntity, layer: String) -> void:
@@ -178,218 +155,167 @@ static func _put(e: CadEntity, layer: String) -> void:
 	e.lineweight = CadLayer.LW_BYLAYER
 
 
-static func _rect_poly(x: float, y: float, w: float, h: float) -> GeoPoly:
-	return GeoPoly.make(PackedVector2Array([
-		Vector2(x, y), Vector2(x + w, y), Vector2(x + w, y + h), Vector2(x, y + h),
-	]), PackedFloat64Array(), true)
+# ---------------------------------------------------------------------------
+# 房间与门窗表
+# ---------------------------------------------------------------------------
+
+static func _add_room(doc: CadDocument, p: Vector2, name: String) -> void:
+	var region := CmdArch.RoomCmd.room_polygon_at(doc, p)
+	if region.size() < 3:
+		return
+	var area := absf(CmdArch.RoomCmd._shoelace(region)) / 1000000.0
+	var c := CmdArch.RoomCmd._centroid(region)
+	var t := EntText.make(c + Vector2(0.0, 160.0), name, 500.0)
+	t.text_style = "房间名_5"
+	t.h_align = EntText.HAlign.CENTER
+	_put(t, "文字")
+	doc.add_entity(t, false)
+	var t2 := EntText.make(c - Vector2(0.0, 420.0), "%.1f m²" % area, 320.0)
+	t2.text_style = "标注_2.5"
+	t2.h_align = EntText.HAlign.CENTER
+	_put(t2, "文字")
+	doc.add_entity(t2, false)
 
 
-static func _add_poly(doc: CadDocument, layer: String, p: GeoPoly, closed: bool) -> void:
-	var e := EntPolyline.make_from_geo(GeoPoly.make(p.points, p.bulges, closed))
-	_put(e, layer)
+## 门窗表：从墙体洞口汇总
+static func _add_schedule(doc: CadDocument, origin: Vector2) -> void:
+	var stats := CmdArch.ScheduleCmd.collect(doc)
+	if stats.is_empty():
+		return
+	var keys: Array[String] = []
+	for k in stats.keys():
+		keys.append(String(k))
+	keys.sort()
+	var row_h := 700.0
+	var cols := [2000.0, 1200.0, 1200.0, 1000.0, 1600.0]
+	var total_w := 0.0
+	for c in cols:
+		total_w += float(c)
+	var rows := keys.size()
+	var total_h := row_h * float(rows + 2)
+	for i in range(rows + 3):
+		var y := origin.y - float(i) * row_h
+		_log_line(doc, Vector2(origin.x, y), Vector2(origin.x + total_w, y))
+	var x := origin.x
+	_log_line(doc, Vector2(x, origin.y), Vector2(x, origin.y - total_h))
+	for c in cols:
+		x += float(c)
+		_log_line(doc, Vector2(x, origin.y), Vector2(x, origin.y - total_h))
+	_center_text(doc, Vector2(origin.x + total_w * 0.5, origin.y + row_h * 0.55), "门窗表", 450.0)
+	var headers := ["门窗编号", "洞口宽", "洞口高", "数量", "类型"]
+	x = origin.x
+	for i in range(headers.size()):
+		_center_text(doc, Vector2(x + float(cols[i]) * 0.5, origin.y - row_h * 0.5), headers[i], 300.0)
+		x += float(cols[i])
+	for r in range(rows):
+		var k := keys[r]
+		var st: Dictionary = stats[k]
+		var h := 0.0
+		if k.length() >= 5:
+			h = float(k.substr(3, 2).to_int()) * 100.0
+		var y := origin.y - row_h * float(r + 1) - row_h * 0.5
+		var vals := [k, "%.0f" % float(st["width"]), "%.0f" % h,
+			str(int(st["count"])), "窗" if bool(st["window"]) else "门"]
+		x = origin.x
+		for i in range(vals.size()):
+			_center_text(doc, Vector2(x + float(cols[i]) * 0.5, y), vals[i], 280.0)
+			x += float(cols[i])
+
+
+static func _log_line(doc: CadDocument, a: Vector2, b: Vector2) -> void:
+	var e := EntLine.make(a, b)
+	_put(e, "尺寸标注")
+	e.lineweight = 0.5
 	doc.add_entity(e, false)
 
 
-## 门：门扇线（垂直于墙）+ 90° 开启弧。国标中门开启弧用细实线。
-static func _add_door(doc: CadDocument, layer: String, base: Vector2, width: float, rot: float, _swing_left: bool) -> void:
-	var xf := Transform2D(rot, base)
-	var leaf := EntLine.make(xf * Vector2(0, 0), xf * Vector2(0, width))
-	_put(leaf, layer)
-	doc.add_entity(leaf, false)
-	var arc := EntArc.make(base, width, rot + PI * 0.5, rot + PI)
-	_put(arc, layer)
-	doc.add_entity(arc, false)
+static func _center_text(doc: CadDocument, pos: Vector2, s: String, h: float) -> void:
+	var t := EntText.make(pos, s, h)
+	t.text_style = "仿宋_3.5"
+	t.h_align = EntText.HAlign.CENTER
+	t.v_align = EntText.VAlign.MIDDLE
+	_put(t, "文字")
+	doc.add_entity(t, false)
 
 
-## 窗：国标用三条平行细线表示（窗台线 + 玻璃线 + 窗顶线）
-static func _add_window(doc: CadDocument, layer: String, x: float, y: float, _rot: float, width: float, wall: float) -> void:
-	for k in [-1.0, 0.0, 1.0]:
-		var off := Vector2(k * wall * 0.5 * 0.72, 0.0)
-		var e := EntLine.make(Vector2(x, y) + off, Vector2(x, y + width) + off)
-		_put(e, layer)
-		doc.add_entity(e, false)
+# ---------------------------------------------------------------------------
+# 国标符号示例
+# ---------------------------------------------------------------------------
 
-
-## 45° 素线填充。真实的关联填充（拾取边界自动生成）在 P3 实现，
-## 这里先用直接生成的线段验证渲染质量。
-static func _add_hatch_lines(doc: CadDocument, layer: String, r: Rect2, spacing: float, angle: float) -> void:
-	if spacing <= 0.0:
-		return
-	var dir := Vector2(cos(angle), sin(angle))
-	var nrm := Vector2(-dir.y, dir.x)
-	# 以矩形中心为基准，沿法向铺线
-	var c := r.position + r.size * 0.5
-	var half_diag := r.size.length() * 0.5
-	var count := int(half_diag * 2.0 / spacing) + 2
-	var segs := PackedVector2Array()
-	for i in range(count):
-		var off := (float(i) - float(count) * 0.5) * spacing
-		var base := c + nrm * off
-		var a := base - dir * half_diag
-		var b := base + dir * half_diag
-		var clipped := _clip_seg_rect(a, b, r)
-		if clipped.size() == 2:
-			segs.append(clipped[0])
-			segs.append(clipped[1])
-	if segs.is_empty():
-		return
-	# 用一条多段线承载所有填充线段（渲染器会自动分桶批量提交）
-	var e := EntPolyline.make(segs, PackedFloat64Array(), false)
-	_put(e, layer)
-	doc.add_entity(e, false)
-
-
-## 直线段对矩形的裁剪（Liang-Barsky）
-static func _clip_seg_rect(a: Vector2, b: Vector2, r: Rect2) -> PackedVector2Array:
-	var dx := b.x - a.x
-	var dy := b.y - a.y
-	var t0 := 0.0
-	var t1 := 1.0
-	var p := PackedFloat64Array([-dx, dx, -dy, dy])
-	var q := PackedFloat64Array([a.x - r.position.x, r.position.x + r.size.x - a.x, a.y - r.position.y, r.position.y + r.size.y - a.y])
-	for i in range(4):
-		if absf(p[i]) <= 1.0e-12:
-			if q[i] < 0.0:
-				return PackedVector2Array()
-		else:
-			var t := q[i] / p[i]
-			if p[i] < 0.0:
-				t0 = maxf(t0, t)
-			else:
-				t1 = minf(t1, t)
-	if t0 > t1:
-		return PackedVector2Array()
-	return PackedVector2Array([a + Vector2(dx, dy) * t0, a + Vector2(dx, dy) * t1])
-
-
-## 尺寸链：按 GB/T 50001 用线性标注图元逐段生成。
-## 尺寸界线、45° 斜短线起止符号、尺寸数字的排版全部由 EntDim 依标注样式推导，
-## 这里只提供被标注的点与尺寸线位置。
-static func _add_linear_chain(doc: CadDocument, stops: Array, y: float) -> void:
-	if stops.size() < 2:
-		return
-	for i in range(stops.size() - 1):
-		var a := Vector2(float(stops[i]), 0.0)
-		var b := Vector2(float(stops[i + 1]), 0.0)
-		# 尺寸线放在两点中点下方，EntDim 会据此判定为水平标注
-		var mid := (a + b) * 0.5
-		var d := EntDim.make_linear(a, b, Vector2(mid.x, y))
-		d.dim_style_name = doc.current_dim_style
-		d.text_style_name = "标注_2.5"
-		_put(d, "尺寸标注")
-		doc.add_entity(d, false)
-
-
-## 材料图例展示条：用国标图例库生成若干常用建筑材料的填充，
-## 每个图例下方标注名称，便于一眼核对图案与国标是否一致。
-static func _add_hatch_legend(doc: CadDocument, hatch_layer: String, txt_layer: String) -> void:
-	var patterns := ["钢筋混凝土", "多孔材料", "夯土" if false else "夯实土壤",
-		"天然石材", "松散保温材料", "金属"]
-	# 放在图面最下方、图名左侧的空位，避免压住尺寸链
-	var cell := 800.0
-	var gap := 200.0
-	var x0 := -7000.0
-	var y0 := -5600.0
-	for i in range(patterns.size()):
-		var bx := x0 + float(i) * (cell + gap)
-		var box := Rect2(bx, y0, cell, cell)
-		# 边界轮廓
-		_add_poly(doc, hatch_layer, _rect_poly(box.position.x, box.position.y,
-			box.size.x, box.size.y), true)
-		# 国标图案填充
-		var h := EntHatch.make(PackedVector2Array([
-			Vector2(box.position.x, box.position.y),
-			Vector2(box.position.x + box.size.x, box.position.y),
-			Vector2(box.position.x + box.size.x, box.position.y + box.size.y),
-			Vector2(box.position.x, box.position.y + box.size.y),
-		]), patterns[i])
-		h.origin = box.position
-		# 图例格子很小，按出图比例 1:100 时图案会太稀，故整体缩小图案比例
-		h.pattern_scale = 0.35
-		_put(h, hatch_layer)
-		doc.add_entity(h, false)
-		# 名称
-		var t := EntText.make(Vector2(box.position.x + box.size.x * 0.5,
-			box.position.y - 180.0), patterns[i], 220.0)
-		t.text_style = "仿宋_3.5"
-		t.h_align = EntText.HAlign.CENTER
-		_put(t, txt_layer)
-		doc.add_entity(t, false)
-
-	# 实心填充示例：建筑平面图中被剖切的墙体常用实心 poché 表示
-	var solid_box := Rect2(x0 + float(patterns.size()) * (cell + gap), y0, cell, cell)
-	_add_poly(doc, hatch_layer, _rect_poly(solid_box.position.x, solid_box.position.y,
-		solid_box.size.x, solid_box.size.y), true)
-	var hs := EntHatch.make(PackedVector2Array([
-		Vector2(solid_box.position.x, solid_box.position.y),
-		Vector2(solid_box.position.x + solid_box.size.x, solid_box.position.y),
-		Vector2(solid_box.position.x + solid_box.size.x, solid_box.position.y + solid_box.size.y),
-		Vector2(solid_box.position.x, solid_box.position.y + solid_box.size.y),
-	]), "实心")
-	hs.solid = true
-	_put(hs, hatch_layer)
-	doc.add_entity(hs, false)
-	var ts := EntText.make(Vector2(solid_box.position.x + solid_box.size.x * 0.5,
-		solid_box.position.y - 180.0), "实心填充", 220.0)
-	ts.text_style = "仿宋_3.5"
-	ts.h_align = EntText.HAlign.CENTER
-	_put(ts, txt_layer)
-	doc.add_entity(ts, false)
-
-
-## 七种国标符号的示例。放在图面左下方，便于一眼核对画法。
-static func _add_symbols(doc: CadDocument, dim_layer: String) -> void:
-	var base := Vector2(-6200.0, 4200.0)
-	# 标高符号：室内地坪 ±0.000 与基础底 -1.500
-	for pair in [[Vector2(0, 0), 0.0, "±0.000"], [Vector2(2400, 0), -1500.0, "-1.500"]]:
-		var el := EntSymbols.Elevation.make(base + pair[0], float(pair[1]))
-		_put(el, dim_layer)
+## 七种国标符号的示例，集中在图面左下方，便于一眼核对画法
+static func _add_symbols(doc: CadDocument) -> void:
+	var base := Vector2(-7000.0, 5600.0)
+	for pair in [[Vector2(0, 0), 0.0], [Vector2(2200, 0), -1500.0]]:
+		var off: Vector2 = pair[0]
+		var el := EntSymbols.Elevation.make(base + off, float(pair[1]))
+		_put(el, "尺寸标注")
 		doc.add_entity(el, false)
-		# 引出到被标注位置的短引线
-		var ln := EntLine.make(base + pair[0] + Vector2(0, 0), base + pair[0] + Vector2(0, -700))
-		_put(ln, dim_layer)
+		var ln := EntLine.make(base + off, base + off + Vector2(0.0, -700.0))
+		_put(ln, "尺寸标注")
 		doc.add_entity(ln, false)
 
-	# 索引符号：上 3 下 建施-05
-	var idx := EntSymbols.IndexMark.make_index(base + Vector2(0, -2400), "3", "建施-05")
-	_put(idx, dim_layer)
+	var idx := EntSymbols.IndexMark.make_index(base + Vector2(0.0, -2000.0), "3", "建施-05")
+	_put(idx, "尺寸标注")
 	doc.add_entity(idx, false)
-
-	# 详图符号：上 3
-	var det := EntSymbols.IndexMark.make_detail(base + Vector2(2400, -2400), "3")
-	_put(det, dim_layer)
+	var det := EntSymbols.IndexMark.make_detail(base + Vector2(2200.0, -2000.0), "3")
+	_put(det, "尺寸标注")
 	doc.add_entity(det, false)
 
-	# 剖切符号：沿纵向剖切 1-1，投射方向朝左
-	var sec := EntSymbols.SectionMark.make(Vector2(-5200, -600), Vector2(-5200, 6800), 1, "1")
-	_put(sec, dim_layer)
+	var sec := EntSymbols.SectionMark.make(Vector2(-4400.0, -900.0), Vector2(-4400.0, 6900.0), 1, "1")
+	_put(sec, "尺寸标注")
 	doc.add_entity(sec, false)
 
-	# 引出线 + 折断线 + 波浪线
 	var lead := EntSymbols.Leader.make(PackedVector2Array([
-		base + Vector2(400, -3600), base + Vector2(1200, -4400), base + Vector2(3000, -4400)
-	]), "外墙外保温做法见详图")
-	_put(lead, dim_layer)
+		base + Vector2(400.0, -3000.0), base + Vector2(1200.0, -3800.0),
+		base + Vector2(3200.0, -3800.0)]), "外墙外保温做法见详图")
+	_put(lead, "尺寸标注")
 	doc.add_entity(lead, false)
 
-	# 折断线与波浪线放在符号区下方的空位，避免压住平面图
-	var bkl := EntSymbols.BreakLine.make(base + Vector2(0, -5200), base + Vector2(2800, -5200))
-	_put(bkl, dim_layer)
+	var bkl := EntSymbols.BreakLine.make(Vector2(-7800.0, -900.0), Vector2(-5400.0, -900.0))
+	_put(bkl, "尺寸标注")
 	doc.add_entity(bkl, false)
-
-	var wavy := EntSymbols.BreakLine.make(base + Vector2(0, -6200), base + Vector2(2800, -6200), true)
-	_put(wavy, dim_layer)
+	var wavy := EntSymbols.BreakLine.make(Vector2(-7800.0, -1700.0), Vector2(-5400.0, -1700.0), true)
+	_put(wavy, "尺寸标注")
 	doc.add_entity(wavy, false)
 
 
-static func _add_room(doc: CadDocument, layer: String, pos: Vector2, name: String, area: String) -> void:
-	var t := EntText.make(pos, name, 350.0)
-	t.text_style = "房间名_5"
-	t.h_align = EntText.HAlign.CENTER
-	_put(t, layer)
-	doc.add_entity(t, false)
-	var a := EntText.make(pos - Vector2(0, 420.0), area, 250.0)
-	a.text_style = "标注_2.5"
-	a.h_align = EntText.HAlign.CENTER
-	_put(a, layer)
-	doc.add_entity(a, false)
+# ---------------------------------------------------------------------------
+# 材料图例展示条
+# ---------------------------------------------------------------------------
+
+## 用国标图例库生成若干常用建筑材料的填充，下方标注名称
+static func _add_hatch_legend(doc: CadDocument) -> void:
+	var patterns := ["钢筋混凝土", "多孔材料", "夯实土壤", "天然石材",
+		"松散保温材料", "金属", "普通砖"]
+	var cell := 800.0
+	var gap := 200.0
+	var x0 := -9400.0
+	var y0 := -6600.0
+	for i in range(patterns.size()):
+		var bx := x0 + float(i) * (cell + gap)
+		var pts := PackedVector2Array([
+			Vector2(bx, y0), Vector2(bx + cell, y0),
+			Vector2(bx + cell, y0 + cell), Vector2(bx, y0 + cell)])
+		var outline := EntPolyline.make(pts, PackedFloat64Array(), true)
+		_put(outline, "图例填充")
+		doc.add_entity(outline, false)
+		var h := EntHatch.make(pts, patterns[i])
+		h.origin = pts[0]
+		h.pattern_scale = 0.35
+		_put(h, "图例填充")
+		doc.add_entity(h, false)
+		_center_text(doc, Vector2(bx + cell * 0.5, y0 - 220.0), patterns[i], 220.0)
+
+	# 实心填充示例：剖切到的墙体常用 poché 表示
+	var sx := x0 + float(patterns.size()) * (cell + gap)
+	var spts := PackedVector2Array([
+		Vector2(sx, y0), Vector2(sx + cell, y0),
+		Vector2(sx + cell, y0 + cell), Vector2(sx, y0 + cell)])
+	var soutline := EntPolyline.make(spts, PackedFloat64Array(), true)
+	_put(soutline, "图例填充")
+	doc.add_entity(soutline, false)
+	var hs := EntHatch.make(spts, "实心")
+	hs.solid = true
+	_put(hs, "图例填充")
+	doc.add_entity(hs, false)
+	_center_text(doc, Vector2(sx + cell * 0.5, y0 - 220.0), "实心填充", 220.0)

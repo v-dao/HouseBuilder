@@ -31,6 +31,7 @@ enum Type {
 	XLINE,
 	RAY,
 	SYMBOL,
+	WALL,
 }
 
 ## 图元所属空间

@@ -23,6 +23,15 @@ const DEFS := [
 	["BLOCK", ["B", "创建块"], "块", "定义块：选择对象 + 基点 + 块名"],
 	["INSERT", ["I", "DDINSERT", "插入块"], "块", "插入块：块名 + 插入点 + 比例 + 旋转"],
 	["ATTEDIT", ["ATE", "属性编辑"], "块", "编辑属性块各字段的值"],
+
+	# --- 建筑 ---
+	["AXISGRID", ["AG", "轴网"], "建筑", "参数化轴网：轴距 + 左下角，自动编号并生成三道尺寸"],
+	["WALL", ["W", "墙", "双线墙"], "建筑", "参数化墙体：墙厚 + 中心线，门窗洞口自动断开墙线"],
+	["DOOR", ["DR", "门"], "建筑", "插入门：编号 + 点取墙体 + 点取位置"],
+	["WINDOW", ["WIN", "窗"], "建筑", "插入窗：编号 + 点取墙体 + 点取位置"],
+	["ROOM", ["RM", "房间"], "建筑", "房间：点取内部一点，自动算净面积并标注"],
+	["STAIR", ["ST", "楼梯"], "建筑", "参数化双跑楼梯：踏步数/踏步宽/梯段宽/平台深"],
+	["SCHEDULE", ["SCHED", "门窗表"], "建筑", "门窗表：统计门窗洞口并生成表格"],
 	["TEXT", ["DT", "T", "文字"], "绘制", "单行文字：位置 + 字高 + 内容"],
 	["MTEXT", ["MT", "多行文字"], "绘制", "多行文字：字宽框 + 字高 + 内容（支持自动换行与分段）"],
 	["TEXTEDIT", ["ED", "DDEDIT", "改文字"], "编辑", "修改文字：点取文字图元后改内容"],
@@ -247,6 +256,20 @@ static func create(name: String) -> CadCommand:
 			return CmdBlock.InsertCmd.new()
 		"ATTEDIT":
 			return CmdBlock.AttEdit.new()
+		"AXISGRID":
+			return CmdArch.AxisGridCmd.new()
+		"WALL":
+			return CmdArch.WallCmd.new()
+		"DOOR":
+			return CmdArch.OpeningCmd.new(false)
+		"WINDOW":
+			return CmdArch.OpeningCmd.new(true)
+		"ROOM":
+			return CmdArch.RoomCmd.new()
+		"STAIR":
+			return CmdArch.StairCmd.new()
+		"SCHEDULE":
+			return CmdArch.ScheduleCmd.new()
 	return null
 
 

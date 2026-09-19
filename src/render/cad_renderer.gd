@@ -65,6 +65,7 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 
 	var culled := 0
 	var drawn := 0
+	var wall_count := 0
 	var vr := view.visible_rect()
 	var xf := view.transform()
 	var sag := view.sagitta_for_pixels(sagitta_px)
@@ -83,6 +84,12 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 		if e.type == CadEntity.Type.POINT:
 			_collect_point(doc, view, e as EntPoint)
 			drawn += 1
+			continue
+
+		# 墙体：不走逐墙绘制，改由下方的并集轮廓统一出图，
+		# 否则两墙相接处会露出对方的端边与内线
+		if e.type == CadEntity.Type.WALL:
+			wall_count += 1
 			continue
 
 		# 块引用：块内图元可能各有图层与颜色（随块 BYBLOCK），
@@ -107,6 +114,10 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 				_emit_curve(doc, bucket, c, lt, e.linetype_scale, xf, sag, view.zoom)
 		drawn += 1
 
+	# 墙体并集轮廓：必须在普通图元之前入桶，使墙线压在被填充的构件之下。
+	# 并集按文档 revision 缓存，文档不变时不重算。
+	if wall_count > 0:
+		_emit_walls(doc, xf)
 	_flush(ci)
 	_draw_solids(view, ci)
 	_draw_points(doc, view, ci)
@@ -271,6 +282,32 @@ func _append_dashed(out: PackedVector2Array, pts: PackedVector2Array,
 # ---------------------------------------------------------------------------
 # 文字
 # ---------------------------------------------------------------------------
+
+## 把墙体并集轮廓输出为线段。
+## 每个多边形既画外轮廓也画洞（内环）的轮廓，才能正确表现带天井的平面。
+func _emit_walls(doc: CadDocument, view_xf: Transform2D) -> void:
+	var outlines := WallUnion.outline(doc)
+	if outlines.is_empty():
+		return
+	var lw := 1.0
+	if show_lineweight:
+		var l := doc.get_layer("墙体")
+		lw = clampf((l.lineweight if l != null else 1.0) * px_per_mm, min_width_px, max_width_px)
+	var color := Color(0.95, 0.95, 0.92)
+	var l := doc.get_layer("墙体")
+	if l != null:
+		color = l.color
+	var bucket := _bucket(color, lw)
+	for poly in outlines:
+		var pts: PackedVector2Array = poly
+		if pts.size() < 3:
+			continue
+		var scr := view_xf * pts
+		for i in range(scr.size()):
+			bucket.append(scr[i])
+			bucket.append(scr[(i + 1) % scr.size()])
+		_seg_count += scr.size()
+
 
 ## 展开块引用：把块内图元按插入变换落到模型空间，逐个解析颜色后入桶。
 func _emit_insert(doc: CadDocument, view: ViewTransform, ins: EntInsert,

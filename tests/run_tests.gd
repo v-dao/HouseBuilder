@@ -87,6 +87,10 @@ func _initialize() -> void:
 	p4.run()
 	_T.merge(p4)
 
+	var p5 := P5Tests.new()
+	p5.run()
+	_T.merge(p5)
+
 	_sync_counts()
 	_print_summary()
 	quit(0 if _T.fail_count == 0 else 1)

@@ -85,6 +85,7 @@ func _build_toolbar() -> Control:
 	hb.add_child(_cmd_menu("标注", ["标注"]))
 	hb.add_child(_cmd_menu("符号", ["符号"]))
 	hb.add_child(_cmd_menu("块", ["块"]))
+	hb.add_child(_cmd_menu("建筑", ["建筑"]))
 	hb.add_child(VSeparator.new())
 	hb.add_child(_btn("删除", func() -> void: viewport.delete_selection()))
 	hb.add_child(_btn("全选", func() -> void: viewport.select_all()))
