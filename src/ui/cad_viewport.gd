@@ -150,6 +150,9 @@ func _snapped_for_preview() -> Vector2:
 	if r.hit:
 		_snap_screen = view.to_screen(r.point)
 		_snap_active = true
+	# 悬停获取追踪基准点：停在同一捕捉点上足够久即记为基准
+	if snap.update_hover(r, Time.get_ticks_msec()):
+		pass
 	return r.point
 
 
@@ -179,6 +182,9 @@ func _draw() -> void:
 	if active_command != null:
 		preview_p = _snapped_for_preview()
 		active_command.draw_preview(self, view, preview_p)
+	# 追踪对齐轴：只在命令进行中显示（追踪本来就是命令内的辅助）
+	if active_command != null:
+		snap.draw_tracking(self, view, _last_snap)
 	# 捕捉标记：只在命令取点或待命状态下显示，便于预览将要落在哪里
 	if _last_snap != null and _last_snap.hit and (_mouse_inside or _snap_active):
 		var origin = view.to_screen(_last_snap.track_from) if _last_snap.has_track else null
@@ -604,6 +610,9 @@ func start_command(cmd: CadCommand, args := {}) -> void:
 		active_command = null
 	active_command = cmd
 	_last_command_name = cmd.cmd_name()
+	# 命令边界清空追踪基准：跨命令的基准没有意义，
+	# 留着反而会在新命令里造成误吸附
+	snap.clear_tracking()
 	cmd.ctx = ctx
 	cmd.start(args)
 	command_started.emit(_last_command_name)
@@ -618,6 +627,7 @@ func _end_command() -> void:
 	if active_command != null:
 		active_command.finished = true
 		active_command = null
+	snap.clear_tracking()
 	command_prompt_changed.emit("")
 	command_finished.emit()
 	selection_changed.emit(ctx.selection.size())
@@ -633,6 +643,7 @@ func cancel_command() -> void:
 		return
 	active_command.cancel()
 	active_command = null
+	snap.clear_tracking()
 	command_prompt_changed.emit("")
 	command_finished.emit()
 	queue_redraw()
@@ -758,4 +769,11 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		KEY_F10:
 			snap.polar_enabled = not snap.polar_enabled
 			snap_changed.emit()
+			accept_event()
+		KEY_F11:
+			snap.tracking_enabled = not snap.tracking_enabled
+			if not snap.tracking_enabled:
+				snap.clear_tracking()
+			snap_changed.emit()
+			queue_redraw()
 			accept_event()

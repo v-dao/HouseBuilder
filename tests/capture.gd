@@ -56,6 +56,35 @@ func _ready() -> void:
 		SnapType.name_of(vp._last_snap.type) if vp._last_snap != null else "无",
 		str(vp._last_snap.point) if vp._last_snap != null else "-"])
 
+	# 对象捕捉追踪：起一条直线命令，获取两个基准点，
+	# 把光标放到两条追踪轴的交点上，核对虚线是否画出来
+	vp.exit_layout()
+	vp.renderer.show_lineweight = false
+	# 让两个基准点与它们的交点同时落在视野内
+	vp.view.zoom = 0.09
+	vp.view.center = Vector2(9000.0, 1200.0)
+	vp.start_command(CmdLine.new())
+	vp.snap.clear_tracking()
+	# 选在建筑之外的空位取基准，避免与几何捕捉点冲突 ——
+	# 几何捕捉优先于追踪（这是正确行为），所以要演示追踪本身就得避开前者
+	vp.snap.acquire(Vector2(12000.0, 5000.0))  # 出竖直轴 x=12000 与水平轴 y=5000
+	vp.snap.acquire(Vector2(6000.0, -3000.0))  # 出竖直轴 x=6000 与水平轴 y=-3000
+	vp._mouse_inside = true
+	var track_pos := Vector2(12012.0, -2988.0) # 靠近 x=12000 与 y=-3000 的交点
+	vp.mouse_screen = vp.view.to_screen(track_pos)
+	vp.mouse_model = track_pos
+	vp._last_snap = vp.snap.resolve(vp.doc, vp.index, vp.view, track_pos,
+		Vector2(1800.0, 1500.0))
+	vp.queue_redraw()
+	await _settle()
+	await _shot("res://tests/out/_track.png", "对象捕捉追踪")
+	print("[track] 基准点数=%d 捕捉类型=%s 捕捉点=%s 交点=%s" % [
+		vp.snap.track_points.size(),
+		SnapType.name_of(vp._last_snap.type) if vp._last_snap != null else "无",
+		str(vp._last_snap.point) if vp._last_snap != null else "-",
+		str(vp._last_snap.is_track_cross) if vp._last_snap != null else "-"])
+	vp.cancel_command()
+
 	# 图纸空间：核对图框、标题栏、视口内容是否按出图比例摆放
 	var doc = vp.doc
 	var layout: CadLayout = doc.ensure_layout()

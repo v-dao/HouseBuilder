@@ -23,6 +23,14 @@ func run() -> void:
 	suite = "捕捉：类型开关"
 	_test_mask()
 
+	suite = "捕捉：对象捕捉追踪"
+	_test_track_acquire()
+	_test_track_axis()
+	_test_track_cross()
+	_test_track_priority()
+	_test_track_hover()
+	_test_track_switches()
+
 
 ## 造一个测试场景：一条水平线 (0,0)-(1000,0)，一个圆（圆心 (2000,0) 半径 500），
 ## 一条与水平线交叉的竖直线 (500,-500)-(500,500)
@@ -290,3 +298,161 @@ func _test_mask() -> void:
 			SnapType.INTERSECTION, SnapType.PERPENDICULAR, SnapType.TANGENT,
 			SnapType.NODE, SnapType.INSERTION, SnapType.NEAREST, SnapType.POLAR, SnapType.GRID]:
 		ok(SnapType.name_of(t) != "未知", "捕捉类型 %d 应有中文名" % t)
+
+
+# ---------------------------------------------------------------------------
+# 对象捕捉追踪
+# ---------------------------------------------------------------------------
+
+func _empty_scene() -> Array:
+	var doc := CadDocument.new()
+	var q := QuadTree.build(doc.entities, Rect2(-1000, -1000, 4000, 4000))
+	var view := ViewTransform.new()
+	view.zoom = 1.0
+	view.set_view_size(Vector2(1600, 900))
+	return [doc, q, view]
+
+
+func _test_track_acquire() -> void:
+	var eng := SnapEngine.new()
+	ok(eng.track_points.is_empty(), "初始无追踪基准")
+	ok(eng.acquire(Vector2(100, 200)), "应能获取第一个基准")
+	ok(not eng.acquire(Vector2(100, 200)), "同一位置不应重复获取")
+	ok(not eng.acquire(Vector2(100.0005, 200.0005)), "容差内的近似点也不应重复")
+	ok(eng.track_points.size() == 1, "去重后只应有一个基准")
+	ok(eng.acquire(Vector2(500, 600)), "不同位置应能获取")
+	ok(eng.track_points.size() == 2, "应有两个基准")
+	# 超出上限时丢弃最早的
+	for i in range(10):
+		eng.acquire(Vector2(1000 + i * 100, 1000))
+	ok(eng.track_points.size() == SnapEngine.MAX_TRACK_POINTS,
+		"基准数应被限制在 %d 以内，实际 %d" % [SnapEngine.MAX_TRACK_POINTS, eng.track_points.size()])
+	eng.clear_tracking()
+	ok(eng.track_points.is_empty(), "清空后不应有基准")
+
+
+## 单轴对齐：光标靠近基准的竖直轴时，x 被吸附，y 保持光标值
+func _test_track_axis() -> void:
+	var sc := _empty_scene()
+	var doc: CadDocument = sc[0]
+	var q: QuadTree = sc[1]
+	var view: ViewTransform = sc[2]
+	var eng := SnapEngine.new()
+	eng.aperture_px = 20.0
+	eng.acquire(Vector2(1000, 2000))
+	# 光标在竖直轴附近（x 差 5，在 20 像素靶框内），y 远离水平轴
+	var r := eng.resolve(doc, q, view, Vector2(1005, 3000), null)
+	ok(r.hit, "靠近追踪轴应命中")
+	ok(r.type == SnapType.TRACK, "应为追踪类型，实际 %s" % SnapType.name_of(r.type))
+	close(r.point.x, 1000.0, "竖直轴应固定 x", 1e-6)
+	close(r.point.y, 3000.0, "未命中的方向应保持光标值", 1e-6)
+	ok(not r.is_track_cross, "只命中一条轴时不应判为交点")
+
+	# 靠近水平轴（y 差 4）
+	var r2 := eng.resolve(doc, q, view, Vector2(3000, 2004), null)
+	ok(r2.hit, "靠近水平轴应命中")
+	close(r2.point.y, 2000.0, "水平轴应固定 y", 1e-6)
+	close(r2.point.x, 3000.0, "未命中的方向应保持光标值", 1e-6)
+
+	# 远离两条轴则不命中
+	var r3 := eng.resolve(doc, q, view, Vector2(3000, 3000), null)
+	ok(not r3.hit, "远离追踪轴不应命中")
+
+
+## 双轴交点：一横一竖同时命中时取交点
+func _test_track_cross() -> void:
+	var sc := _empty_scene()
+	var doc: CadDocument = sc[0]
+	var q: QuadTree = sc[1]
+	var view: ViewTransform = sc[2]
+	var eng := SnapEngine.new()
+	eng.aperture_px = 20.0
+	eng.acquire(Vector2(1000, 2000))   # 提供竖直轴 x=1000 与水平轴 y=2000
+	eng.acquire(Vector2(3000, 4000))   # 提供竖直轴 x=3000 与水平轴 y=4000
+	# 光标靠近 x=1000 的竖直轴与 y=4000 的水平轴 —— 两条轴来自不同基准
+	var r := eng.resolve(doc, q, view, Vector2(1004, 3997), null)
+	ok(r.hit, "应命中两条追踪轴的交叉区")
+	ok(r.is_track_cross, "应判为追踪交点")
+	close(r.point.x, 1000.0, "交点 x 取自竖直轴的基准", 1e-6)
+	close(r.point.y, 4000.0, "交点 y 取自水平轴的基准", 1e-6)
+	ok(r.track_axes.size() == 2, "应记录两条用到的轴，实际 %d" % r.track_axes.size())
+
+
+## 对象捕捉优先于追踪：光标同时落在几何捕捉点与追踪轴上时取几何点
+func _test_track_priority() -> void:
+	var sc := _scene()
+	var doc: CadDocument = sc[0]
+	var q: QuadTree = sc[1]
+	var view: ViewTransform = sc[2]
+	var eng := SnapEngine.new()
+	eng.aperture_px = 20.0
+	# 基准点放在水平线端点 (0,0) 的正上方，使 (0,0) 同时是追踪轴交点与端点
+	eng.acquire(Vector2(0, 500))
+	eng.acquire(Vector2(500, 0))
+	var r := eng.resolve(doc, q, view, Vector2(2, -3), null)
+	ok(r.hit, "应命中")
+	ok(r.type != SnapType.TRACK,
+		"几何捕捉应优先于追踪，实际 %s" % SnapType.name_of(r.type))
+	ok(r.type == SnapType.ENDPOINT, "应命中端点，实际 %s" % SnapType.name_of(r.type))
+
+
+## 悬停获取：停在同一捕捉点上超过设定时长才记为基准
+func _test_track_hover() -> void:
+	var eng := SnapEngine.new()
+	eng.acquire_linger_ms = 300
+	var hit := SnapEngine.Result.new()
+	hit.hit = true
+	hit.point = Vector2(1000, 1000)
+	hit.type = SnapType.ENDPOINT
+
+	# 第一次出现：只记录，不获取
+	ok(not eng.update_hover(hit, 0), "首次悬停不应立即获取")
+	ok(eng.track_points.is_empty(), "此时不应有基准")
+	# 200ms 后仍在同一位置：仍未到时
+	ok(not eng.update_hover(hit, 200), "未到悬停时长不应获取")
+	ok(eng.track_points.is_empty(), "此时仍不应有基准")
+	# 400ms：到时，获取
+	ok(eng.update_hover(hit, 400), "超过悬停时长应获取基准")
+	ok(eng.track_points.size() == 1, "应有一个基准")
+
+	# 位置变化会重新计时
+	hit.point = Vector2(2000, 2000)
+	ok(not eng.update_hover(hit, 500), "位置变化后应重新计时")
+	ok(not eng.update_hover(hit, 700), "重新计时未到时不应获取")
+	ok(eng.update_hover(hit, 900), "重新计时到时应获取")
+
+	# 追踪结果本身不再作为新基准（否则会自我累积）
+	var tr := SnapEngine.Result.new()
+	tr.hit = true
+	tr.point = Vector2(3000, 3000)
+	tr.type = SnapType.TRACK
+	ok(not eng.update_hover(tr, 2000), "追踪结果不应再被获取为基准")
+	ok(not eng.update_hover(tr, 3000), "追踪结果不应再被获取为基准（到时后）")
+
+	# 未命中的结果不参与
+	var miss := SnapEngine.Result.new()
+	ok(not eng.update_hover(miss, 4000), "未命中不应参与悬停获取")
+	ok(not eng.update_hover(null, 4000), "空结果不应崩溃")
+
+
+func _test_track_switches() -> void:
+	var sc := _empty_scene()
+	var doc: CadDocument = sc[0]
+	var q: QuadTree = sc[1]
+	var view: ViewTransform = sc[2]
+	var eng := SnapEngine.new()
+	eng.aperture_px = 20.0
+	eng.acquire(Vector2(1000, 1000))
+	# 关闭追踪后不生效
+	eng.tracking_enabled = false
+	ok(not eng.resolve(doc, q, view, Vector2(1003, 3000), null).hit, "关闭追踪后不应命中")
+	# update_hover 在关闭时也不获取
+	var hit := SnapEngine.Result.new()
+	hit.hit = true
+	hit.point = Vector2(7777, 7777)
+	hit.type = SnapType.ENDPOINT
+	ok(not eng.update_hover(hit, 0), "关闭追踪时不应获取")
+	ok(not eng.update_hover(hit, 99999), "关闭追踪时不应获取（到时后）")
+	# 重新开启后恢复
+	eng.tracking_enabled = true
+	ok(eng.resolve(doc, q, view, Vector2(1003, 3000), null).hit, "重新开启后应命中")

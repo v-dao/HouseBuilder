@@ -36,6 +36,21 @@ var polar_enabled := false
 var polar_step_deg := 15.0
 ## 捕捉靶框（屏幕像素）
 var aperture_px := 12.0
+
+# --- 对象捕捉追踪（F11）---
+## 是否启用对象捕捉追踪
+var tracking_enabled := true
+## 追踪基准点（命令过程中"获取"到的点）。从每个基准引出水平与竖直对齐轴。
+var track_points: PackedVector2Array = PackedVector2Array()
+## 最多保留的追踪基准数。超过后丢弃最早的 —— 太多基准线会让图面无法读。
+const MAX_TRACK_POINTS := 4
+## 悬停多久（毫秒）把该捕捉点记为追踪基准
+var acquire_linger_ms := 350
+
+## 悬停检测的内部状态
+var _hover_point := Vector2.ZERO
+var _hover_start_ms := 0
+var _hover_active := false
 ## 最多考察多少条候选曲线做交点与垂足计算
 const MAX_CANDIDATES := 24
 
@@ -53,6 +68,11 @@ class Result:
 	var has_track := false
 	## 参与捕捉的那个图元（用于"延长线"等需要原曲线的捕捉）
 	var entity: CadEntity = null
+	## 本次用到的追踪对齐轴，供界面画虚线。
+	## 每项为 [is_vertical: bool, fixed_value: float, base: Vector2]
+	var track_axes: Array = []
+	## 是否为两条追踪轴的交点（交点比单轴更强）
+	var is_track_cross := false
 
 	func describe() -> String:
 		if not hit:
@@ -88,13 +108,20 @@ func resolve(doc: CadDocument, index: QuadTree, view: ViewTransform,
 		if o.hit:
 			return o
 
-	# 2) 极轴追踪（有基点时优先于正交）
+	# 2) 对象捕捉追踪。优先级高于极轴与正交 ——
+	#    追踪用的是用户"确认过"的基准点，比方向约束更精确。
+	if tracking_enabled and not track_points.is_empty():
+		var t := _resolve_tracking(view, cursor)
+		if t.hit:
+			return t
+
+	# 3) 极轴追踪（有基点时优先于正交）
 	if polar_enabled and has_from:
 		var p := _polar(cursor, from_p)
 		if p.hit:
 			return p
 
-	# 3) 正交
+	# 4) 正交
 	if ortho and has_from:
 		r.hit = true
 		r.point = _ortho_project(cursor, from_p)
@@ -104,7 +131,7 @@ func resolve(doc: CadDocument, index: QuadTree, view: ViewTransform,
 		r.has_track = true
 		return r
 
-	# 4) 栅格捕捉
+	# 5) 栅格捕捉
 	if grid_snap and grid_step > 0.0:
 		r.hit = true
 		r.point = Vector2(
@@ -282,6 +309,98 @@ func _tangent_points(c: GeoCurve, from: Vector2) -> Array[Vector2]:
 
 
 # ---------------------------------------------------------------------------
+# 对象捕捉追踪
+# ---------------------------------------------------------------------------
+
+## 从已获取的基准点引出水平与竖直对齐轴，光标靠近时吸附。
+##
+## 只吸附被命中的那一个坐标：竖直轴固定 x、水平轴固定 y。
+## 两条轴同时命中时取交点 —— 这正是 OST 最有用的用法
+## （例如过 A 点的竖直线与过 B 点的水平线交点）。
+func _resolve_tracking(view: ViewTransform, cursor: Vector2) -> Result:
+	var tol := view.tolerance_for_pixels(aperture_px)
+	var best_dx := INF
+	var best_dy := INF
+	var tx := 0.0
+	var ty := 0.0
+	var base_x := Vector2.ZERO
+	var base_y := Vector2.ZERO
+	for bp in track_points:
+		var dx := absf(cursor.x - bp.x)
+		if dx <= tol and dx < best_dx:
+			best_dx = dx
+			tx = bp.x
+			base_x = bp
+		var dy := absf(cursor.y - bp.y)
+		if dy <= tol and dy < best_dy:
+			best_dy = dy
+			ty = bp.y
+			base_y = bp
+	var has_x := best_dx < INF
+	var has_y := best_dy < INF
+	if not has_x and not has_y:
+		return Result.new()
+
+	var r := Result.new()
+	r.hit = true
+	r.point = Vector2(tx if has_x else cursor.x, ty if has_y else cursor.y)
+	r.type = SnapType.TRACK
+	r.is_track_cross = has_x and has_y
+	r.label = "追踪交点" if r.is_track_cross else "追踪"
+	if has_x:
+		r.track_axes.append([true, tx, base_x])
+	if has_y:
+		r.track_axes.append([false, ty, base_y])
+	r.has_track = true
+	r.track_from = r.point
+	return r
+
+
+## 悬停获取：光标停在同一个捕捉点上超过 acquire_linger_ms 毫秒，
+## 就把该点记为追踪基准。返回本次是否新获取了一个点。
+##
+## 之所以要"悬停"而不是"一碰就记"：否则光标扫过图面时会不断误收集基准点，
+## 对齐线越积越多，反而没法用。
+func update_hover(r: Result, now_ms: int) -> bool:
+	if not tracking_enabled:
+		_hover_active = false
+		return false
+	if r == null or not r.hit:
+		_hover_active = false
+		return false
+	# 只对真正的几何捕捉点做获取，追踪结果本身不再作为新基准
+	if r.type == SnapType.TRACK or r.type == SnapType.NEAREST \
+			or r.type == SnapType.GRID or r.type == SnapType.POLAR:
+		_hover_active = false
+		return false
+	if not _hover_active or _hover_point.distance_to(r.point) > Tol.DIST:
+		_hover_active = true
+		_hover_point = r.point
+		_hover_start_ms = now_ms
+		return false
+	if now_ms - _hover_start_ms < acquire_linger_ms:
+		return false
+	_hover_active = false
+	return acquire(r.point)
+
+
+## 记一个追踪基准点。已存在相近点时只更新时间不重复添加。
+func acquire(p: Vector2) -> bool:
+	for bp in track_points:
+		if bp.distance_to(p) <= Tol.DIST:
+			return false
+	track_points.append(p)
+	while track_points.size() > MAX_TRACK_POINTS:
+		track_points.remove_at(0)
+	return true
+
+
+func clear_tracking() -> void:
+	track_points.clear()
+	_hover_active = false
+
+
+# ---------------------------------------------------------------------------
 # 正交与极轴
 # ---------------------------------------------------------------------------
 
@@ -310,6 +429,59 @@ func _polar(cursor: Vector2, from: Vector2) -> Result:
 	r.track_from = from
 	r.has_track = true
 	return r
+
+
+# ---------------------------------------------------------------------------
+# 追踪轴的绘制
+# ---------------------------------------------------------------------------
+
+## 绘制追踪对齐轴：从每个基准点引出贯穿视口的水平与竖直虚线。
+## active 为当前捕捉结果，其中被命中的轴用亮色突出，并画出对齐用的十字。
+##
+## 只画贯穿视口的整条线（而不是一小段）是有意的：
+## OST 的用途就是"沿这条线找位置"，线短了反而看不出对齐到哪。
+func draw_tracking(ci: CanvasItem, view: ViewTransform, active: Result = null) -> void:
+	if not tracking_enabled or track_points.is_empty():
+		return
+	var vr := view.visible_rect()
+	var dim := Color(0.55, 0.75, 0.95, 0.45)
+	var hot := Color(1.0, 0.75, 0.35, 0.9)
+	# 记下被命中的轴，便于比对
+	var hot_v: Array[float] = []
+	var hot_h: Array[float] = []
+	if active != null and active.hit and active.type == SnapType.TRACK:
+		for ax in active.track_axes:
+			var rec: Array = ax
+			if bool(rec[0]):
+				hot_v.append(float(rec[1]))
+			else:
+				hot_h.append(float(rec[1]))
+
+	for bp in track_points:
+		# 竖直轴
+		var is_hot_v := _has_close(hot_v, bp.x)
+		_dashed(ci, view.to_screen(Vector2(bp.x, vr.position.y)),
+			view.to_screen(Vector2(bp.x, vr.position.y + vr.size.y)), hot if is_hot_v else dim)
+		# 水平轴
+		var is_hot_h := _has_close(hot_h, bp.y)
+		_dashed(ci, view.to_screen(Vector2(vr.position.x, bp.y)),
+			view.to_screen(Vector2(vr.position.x + vr.size.x, bp.y)), hot if is_hot_h else dim)
+		# 基准点本身画一个小方块，提示它是被"获取"过的
+		var sp := view.to_screen(bp)
+		ci.draw_rect(Rect2(sp - Vector2(3, 3), Vector2(6, 6)), Color(1.0, 0.85, 0.25, 0.9), false, 1.2)
+
+	# 命中的轴再叠一个十字，与捕捉点区分开
+	if active != null and active.hit and active.type == SnapType.TRACK:
+		var p := view.to_screen(active.point)
+		ci.draw_line(p - Vector2(11, 0), p + Vector2(11, 0), hot, 1.6, true)
+		ci.draw_line(p - Vector2(0, 11), p + Vector2(0, 11), hot, 1.6, true)
+
+
+static func _has_close(arr: Array[float], v: float) -> bool:
+	for a in arr:
+		if absf(a - v) <= Tol.DIST:
+			return true
+	return false
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +529,9 @@ func draw_marker(ci: CanvasItem, screen_pos: Vector2, r: Result,
 			ci.draw_rect(Rect2(p - Vector2(s, s), Vector2(s, s) * 2.0), col, false, 1.4)
 			ci.draw_line(p - Vector2(s * 1.5, 0), p + Vector2(s * 1.5, 0), col, 1.2, true)
 			ci.draw_line(p - Vector2(0, s * 1.5), p + Vector2(0, s * 1.5), col, 1.2, true)
+		SnapType.TRACK:
+			# 追踪：十字已在 draw_tracking 里画过，这里只补文字提示
+			pass
 		SnapType.NEAREST:
 			# 沙漏形
 			var h := PackedVector2Array([
