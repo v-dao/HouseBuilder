@@ -13,6 +13,8 @@ var prompt_label: Label = null
 var coord_label: Label = null
 var scale_label: Label = null
 var count_label: Label = null
+var prop_panel: PropertyPanel = null
+var layer_panel: LayerPanel = null
 var sel_label: Label = null
 var stat_label: Label = null
 var grid_check: CheckBox = null
@@ -108,12 +110,18 @@ func _notification(what: int) -> void:
 
 func _build_ui() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# 竖向：工具栏 / 主体（绘图区 + 右侧停靠面板）/ 命令行 / 状态栏
 	var root := VBoxContainer.new()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.add_theme_constant_override("separation", 0)
 	add_child(root)
 
 	root.add_child(_build_toolbar())
+
+	var main_row := HBoxContainer.new()
+	main_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	main_row.add_theme_constant_override("separation", 0)
+	root.add_child(main_row)
 
 	viewport = CadViewport.new()
 	viewport.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -123,7 +131,10 @@ func _build_ui() -> void:
 	viewport.selection_changed.connect(_on_selection_changed)
 	viewport.command_started.connect(func(n: String) -> void:
 		prompt_label.text = CommandRegistry.help_for(n))
-	viewport.command_finished.connect(func() -> void: _refresh_status())
+	viewport.command_finished.connect(func() -> void:
+		_refresh_status()
+		if layer_panel != null:
+			layer_panel.refresh())
 	# F3/F8/F9/F10 在视口里切换状态，界面上的勾选要跟着同步
 	viewport.snap_changed.connect(func() -> void:
 		_collect_settings()
@@ -132,7 +143,25 @@ func _build_ui() -> void:
 			ortho_check.set_pressed_no_signal(viewport.snap.ortho)
 			grid_snap_check.set_pressed_no_signal(viewport.snap.grid_snap)
 			polar_check.set_pressed_no_signal(viewport.snap.polar_enabled))
-	root.add_child(viewport)
+	main_row.add_child(viewport)
+
+	# 右侧停靠面板：特性 与 图层。两者都是制图时高频使用的，
+	# 因此常驻显示而不是藏进对话框。
+	var dock := PanelContainer.new()
+	dock.custom_minimum_size = Vector2(300, 0)
+	main_row.add_child(dock)
+	var tabs := TabContainer.new()
+	dock.add_child(tabs)
+
+	prop_panel = PropertyPanel.new()
+	prop_panel.name = "特性"
+	prop_panel.changed.connect(func() -> void: viewport.queue_redraw())
+	tabs.add_child(prop_panel)
+
+	layer_panel = LayerPanel.new()
+	layer_panel.name = "图层"
+	layer_panel.changed.connect(func() -> void: viewport.queue_redraw())
+	tabs.add_child(layer_panel)
 
 	root.add_child(_build_command_line())
 	root.add_child(_build_status_bar())
@@ -306,7 +335,7 @@ func _do_open(path: String) -> void:
 	_collect_settings()
 	settings.save_to_disk()
 	GbBlocks.install(doc)
-	viewport.setup(doc)
+	_attach_doc()
 	viewport.zoom_extents()
 	_refresh_status()
 	_show_status("已打开 %s（%d 个图元）" % [path.get_file(), doc.entity_count()])
@@ -348,9 +377,8 @@ func _do_import_dxf(path: String) -> void:
 		prompt_label.text = "DXF 导入失败（错误码 %d）：%s" % [err, path]
 		return
 	GbBlocks.install(doc)
-	viewport.setup(doc)
+	_attach_doc()
 	viewport.zoom_extents()
-	_refresh_status()
 	var n := doc.entity_count()
 	var detail := ""
 	for k in r.stats.keys():
@@ -523,7 +551,16 @@ func new_document() -> void:
 	doc = CadDocument.new()
 	# 每个文档都安装内置建筑图库，插入块时即可选用
 	GbBlocks.install(doc)
+	_attach_doc()
+
+
+## 把新文档接到视口与两侧面板上，并刷新界面
+func _attach_doc() -> void:
 	viewport.setup(doc)
+	if prop_panel != null:
+		prop_panel.setup(doc, viewport)
+	if layer_panel != null:
+		layer_panel.setup(doc)
 	_refresh_status()
 
 
@@ -532,9 +569,8 @@ func load_demo() -> void:
 	GbBlocks.install(doc)
 	doc.begin_transaction("载入示例图")
 	DemoDrawing.build(doc)
-	viewport.setup(doc)
+	_attach_doc()
 	viewport.zoom_extents()
-	_refresh_status()
 
 
 # ---------------------------------------------------------------------------
@@ -591,6 +627,8 @@ func _on_prompt_changed(text: String) -> void:
 func _on_selection_changed(n: int) -> void:
 	if sel_label != null:
 		sel_label.text = "选中 %d" % n
+	if prop_panel != null:
+		prop_panel.refresh()
 	_refresh_status()
 
 
