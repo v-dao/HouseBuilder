@@ -1,0 +1,18 @@
+# 换行统一为 LF，检出与提交都不做自动转换。
+# Windows 上 core.autocrlf 默认可能为 true，会把仓库里的 LF 检出成 CRLF，
+# 于是每次提交都跳 "LF will be replaced by CRLF" 警告，且不同机器上
+# 同一文件的行尾不一致。这里显式定死，消除歧义。
+* text=auto eol=lf
+
+# 二进制：不做换行转换，也不做文本差异
+*.bin  binary
+*.png  binary
+*.jpg  binary
+*.ttf  binary
+*.otf  binary
+*.pck  binary
+*.exe  binary
+*.zip  binary
+
+# 生成物：让托管平台在 diff 里折叠，并标出它是生成的
+assets/gbk_table.bin linguist-generated=true
