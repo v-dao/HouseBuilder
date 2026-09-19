@@ -89,6 +89,8 @@ func _build_toolbar() -> Control:
 	hb.add_child(_cmd_menu("块", ["块"]))
 	hb.add_child(_cmd_menu("建筑", ["建筑"]))
 	hb.add_child(VSeparator.new())
+	hb.add_child(_btn("图纸空间", func() -> void: _toggle_layout()))
+	hb.add_child(VSeparator.new())
 	hb.add_child(_btn("删除", func() -> void: viewport.delete_selection()))
 	hb.add_child(_btn("全选", func() -> void: viewport.select_all()))
 	hb.add_child(VSeparator.new())
@@ -463,6 +465,20 @@ func load_demo() -> void:
 # ---------------------------------------------------------------------------
 # 交互回调
 # ---------------------------------------------------------------------------
+
+## 在模型空间与图纸空间之间切换
+func _toggle_layout() -> void:
+	if viewport.is_layout_mode():
+		viewport.exit_layout()
+		_show_status("回到模型空间")
+	else:
+		viewport.enter_layout()
+		var l := doc.current_layout()
+		if l != null:
+			_show_status("进入图纸空间：%s %s%，出图比例 1:%d" % [
+				l.format, "竖式" if l.portrait else "横式", int(l.main_viewport().scale)])
+	_refresh_status()
+
 
 func _run(name: String) -> void:
 	cmd_edit.text = ""

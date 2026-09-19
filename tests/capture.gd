@@ -55,6 +55,25 @@ func _ready() -> void:
 	print("[snap] 捕捉结果: 类型=%s 点=%s" % [
 		SnapType.name_of(vp._last_snap.type) if vp._last_snap != null else "无",
 		str(vp._last_snap.point) if vp._last_snap != null else "-"])
+
+	# 图纸空间：核对图框、标题栏、视口内容是否按出图比例摆放
+	var doc = vp.doc
+	var layout: CadLayout = doc.ensure_layout()
+	layout.title_fields = {
+		"project": "某住宅小区 1# 楼", "drawing": "一层平面图",
+		"number": "建施-05", "scale": "1:100",
+		"design": "张", "draw": "李", "check": "王", "approve": "赵",
+		"sign": "已会签",
+	}
+	vp._mouse_inside = false
+	vp.enter_layout()
+	await _settle()
+	await _shot("res://tests/out/_layout.png", "图纸空间")
+	print("[layout] 幅面=%s 视口比例=1:%d 纸张=%.0fx%.0fmm" % [
+		layout.format, int(layout.main_viewport().scale),
+		layout.paper_size().x, layout.paper_size().y])
+	print("[layout] 视口覆盖模型区域 = %.0f x %.0f mm" % [
+		layout.main_viewport().model_rect().size.x, layout.main_viewport().model_rect().size.y])
 	get_tree().quit(0)
 
 

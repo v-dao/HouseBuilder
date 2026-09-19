@@ -47,6 +47,12 @@ var plot_scale: float = 100.0
 ## 图形单位：国标建筑图以毫米为单位
 var unit_name: String = "mm"
 
+# --- 图纸空间 ---
+## 图纸空间布局（一张图纸 = 一个布局）
+var layouts: Array = []
+## 当前激活的布局下标。-1 表示在模型空间。
+var active_layout: int = -1
+
 # --- 撤销 ---
 var undo: UndoStack = UndoStack.new()
 
@@ -133,6 +139,19 @@ func get_by_handle(h: int) -> CadEntity:
 
 func entity_count() -> int:
 	return entities.size()
+
+
+## 当前激活的布局，模型空间时返回 null
+func current_layout() -> CadLayout:
+	if active_layout < 0 or active_layout >= layouts.size():
+		return null
+	return layouts[active_layout]
+
+
+func ensure_layout(name := "布局1", format := "A3", portrait := false) -> CadLayout:
+	if layouts.is_empty():
+		layouts.append(CadLayout.make(name, format, portrait))
+	return layouts[0]
 
 
 ## 文档外包盒

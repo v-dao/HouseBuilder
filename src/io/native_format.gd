@@ -119,9 +119,17 @@ static func to_dict(doc: CadDocument) -> Dictionary:
 		"dim_styles": dss,
 		"blocks": blks,
 		"entities": ents,
+		"layouts": _layouts_to_arr(doc),
 		# 预留：三维模型 / 施工工序 / 工程量 等后续阶段的数据
 		"extensions": {},
 	}
+
+
+static func _layouts_to_arr(doc: CadDocument) -> Array:
+	var out := []
+	for l in doc.layouts:
+		out.append((l as CadLayout).to_dict())
+	return out
 
 
 static func _dim_style_to_dict(ds: CadDimStyle) -> Dictionary:
@@ -240,6 +248,7 @@ static func from_dict(doc: CadDocument, d: Dictionary) -> Error:
 	_load_dim_styles(doc, d.get("dim_styles", {}))
 	_load_blocks(doc, d.get("blocks", {}))
 	_load_settings(doc, d.get("settings", {}))
+	_load_layouts(doc, d.get("layouts", []))
 
 	# 图元：先全部加入（此时块已就位，块引用能解析到定义）
 	var ents = d.get("entities", [])
@@ -365,6 +374,14 @@ static func _load_blocks(doc: CadDocument, src) -> void:
 				e.owner_block = b.name
 				b.entities.append(e)
 		doc.blocks[b.name] = b
+
+
+static func _load_layouts(doc: CadDocument, src) -> void:
+	doc.layouts.clear()
+	doc.active_layout = -1
+	for ld in (src as Array):
+		if ld is Dictionary:
+			doc.layouts.append(CadLayout.from_dict(ld))
 
 
 static func _load_settings(doc: CadDocument, src) -> void:

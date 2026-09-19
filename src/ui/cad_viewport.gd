@@ -56,6 +56,9 @@ var mouse_screen: Vector2 = Vector2.ZERO
 var _panning := false
 var _pan_anchor := Vector2.ZERO
 var _mouse_inside := false
+## 图框几何缓存：图纸空间下按布局参数生成一次，避免每帧重建
+var _frame_doc: CadDocument = null
+var _frame_key := ""
 
 
 func _ready() -> void:
@@ -142,8 +145,16 @@ func _snapped_for_preview() -> Vector2:
 # 绘制
 # ---------------------------------------------------------------------------
 
+## 当前是否处于图纸空间
+func is_layout_mode() -> bool:
+	return doc != null and doc.current_layout() != null
+
+
 func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), bg_color)
+	if is_layout_mode():
+		_draw_layout()
+		return
 	if show_grid:
 		_draw_grid()
 	if show_axes:
@@ -169,6 +180,111 @@ func _draw() -> void:
 		_draw_selection_box()
 	if show_crosshair and _mouse_inside:
 		_draw_crosshair()
+
+
+## 图纸空间绘制。
+##
+## 坐标语义：此时 view.center / view.zoom 按**图纸毫米**解释，
+## 于是纸张、图框、标题栏都以 1:1 的真实图纸尺寸绘制。
+## 每个视口再把模型内容经「模型 -> 图纸 -> 屏幕」的复合变换画进来，
+## 并裁剪到视口边界 —— 不裁剪的话视口外的模型会溢到图纸其他区域上。
+func _draw_layout() -> void:
+	var layout := doc.current_layout()
+	if layout == null:
+		return
+	# 纸张
+	var paper := layout.paper_size()
+	var p0 := view.to_screen(Vector2.ZERO)
+	var p1 := view.to_screen(paper)
+	var pr := Rect2(p0, Vector2.ZERO).merge(Rect2(p1, Vector2.ZERO))
+	draw_rect(pr, Color(0.97, 0.97, 0.95))
+	draw_rect(pr, Color(0.35, 0.38, 0.42), false, 1.0)
+
+	# 图框 + 标题栏 + 会签栏（按布局参数缓存）
+	_draw_frame(layout)
+
+	# 各视口内的模型内容
+	for v in layout.viewports:
+		_draw_paper_view(layout, v as CadLayout.PaperView)
+
+
+func _draw_frame(layout: CadLayout) -> void:
+	var key := "%s|%s|%s" % [layout.format, str(layout.portrait), str(layout.title_fields)]
+	if _frame_doc == null or key != _frame_key:
+		var fd := CadDocument.new()
+		fd.plot_scale = 1.0
+		GbSheet.build_frame(fd, layout.format, layout.portrait, layout.title_fields)
+		_frame_doc = fd
+		_frame_key = key
+	# 图框按 1:1 图纸尺寸生成，与纸张空间的坐标语义一致，直接画
+	renderer.ltscale = 1.0
+	renderer.clip_enabled = false
+	renderer.draw(_frame_doc, view, self)
+
+
+func _draw_paper_view(layout: CadLayout, vp: CadLayout.PaperView) -> void:
+	# 视口边界：出图时默认不打印，故用浅色提示，屏幕上仍可见
+	var a := view.to_screen(vp.paper_rect.position)
+	var b := view.to_screen(vp.paper_rect.position + vp.paper_rect.size)
+	var screen_rect := Rect2(a, Vector2.ZERO).merge(Rect2(b, Vector2.ZERO))
+	if not vp.print_border:
+		draw_rect(screen_rect, Color(0.45, 0.55, 0.65, 0.5), false, 1.0)
+
+	# 复合变换：模型 -> 图纸 -> 屏幕。
+	# 设图纸视图为 (center=vc, zoom=vz)、视口比例为 s、视口中心为 pc（图纸坐标）、
+	# 模型中心为 mc，则复合后等价于 zoom = vz/s、center = mc - (pc - vc)*s。
+	var vp_view := ViewTransform.new()
+	vp_view.set_view_size(view.view_size)
+	vp_view.zoom = view.zoom / maxf(vp.scale, 1.0e-9)
+	vp_view.center = vp.model_center - (vp.paper_rect.position + vp.paper_rect.size * 0.5 - view.center) * vp.scale
+
+	renderer.ltscale = doc.ltscale
+	renderer.clip_enabled = true
+	renderer.clip_rect = screen_rect
+	# 线宽要按**纸张缩放**换算，而不是固定常数：
+	# 布局的意义就是所见即所得，1.0mm 的墙线在纸上必须真的是 1.0mm。
+	# view.zoom 此时正是「图纸毫米 -> 像素」，直接拿它当 px_per_mm。
+	var saved_px := renderer.px_per_mm
+	renderer.px_per_mm = view.zoom
+	renderer.draw(doc, vp_view, self, [])
+	renderer.px_per_mm = saved_px
+	renderer.clip_enabled = false
+
+
+## 进入图纸空间。若尚无布局则按当前图形范围新建一个。
+func enter_layout() -> void:
+	if doc == null:
+		return
+	var bb := doc.get_bbox()
+	var layout := doc.ensure_layout()
+	layout.fit_model_to_paper(bb)
+	doc.active_layout = 0
+	_frame_key = ""
+	# 视图切到纸张坐标：让整张纸铺满视口
+	var paper := layout.paper_size()
+	view.zoom = minf(size.x / maxf(paper.x, 1.0), size.y / maxf(paper.y, 1.0)) * 0.92
+	view.center = paper * 0.5
+	queue_redraw()
+
+
+## 回到模型空间
+func exit_layout() -> void:
+	if doc == null:
+		return
+	doc.active_layout = -1
+	zoom_extents()
+
+
+## 让布局的视口恰好框住当前图形范围
+func fit_layout_to_drawing() -> void:
+	if doc == null:
+		return
+	var layout := doc.current_layout()
+	if layout == null:
+		return
+	layout.fit_model_to_paper(doc.get_bbox())
+	_frame_key = ""
+	queue_redraw()
 
 
 ## 自适应栅格：从 1-2-5 数列里挑一个间距，使屏幕上落在合理范围。

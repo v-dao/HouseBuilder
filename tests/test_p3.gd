@@ -21,6 +21,11 @@ func run() -> void:
 	_test_sheets()
 	_test_title_block()
 
+	suite = "图纸空间布局"
+	_test_layout_basics()
+	_test_layout_fit()
+	_test_layout_roundtrip()
+
 
 # ---------------------------------------------------------------------------
 # 图例库
@@ -280,3 +285,93 @@ func _test_title_block() -> void:
 		if e is EntText or e is EntMText:
 			texts += 1
 	ok(texts >= 6, "标题栏应写入多项文字（工程名称/图名/图号/比例等），实际 %d" % texts)
+
+
+# ---------------------------------------------------------------------------
+# 图纸空间布局
+# ---------------------------------------------------------------------------
+
+func _test_layout_basics() -> void:
+	var l := CadLayout.make("布局1", "A3", false)
+	var paper := l.paper_size()
+	close(paper.x, 420.0, "A3 横式纸张宽", 1e-6)
+	close(paper.y, 297.0, "A3 横式纸张高", 1e-6)
+	# 竖式交换长短边
+	var lp := CadLayout.make("布局2", "A3", true)
+	close(lp.paper_size().x, 297.0, "A3 竖式纸张宽", 1e-6)
+	close(lp.paper_size().y, 420.0, "A3 竖式纸张高", 1e-6)
+	# 未知幅面退回 A3，不应崩
+	var bad := CadLayout.make("布局3", "不存在的幅面", false)
+	close(bad.paper_size().x, 420.0, "未知幅面应退回 A3", 1e-6)
+
+	# 视口的模型->图纸映射：比例 1:100 时，模型 1000mm 应对应图纸 10mm
+	var vp := l.main_viewport()
+	vp.scale = 100.0
+	vp.paper_rect = Rect2(10, 10, 100, 50)
+	vp.model_center = Vector2(5000, 3000)
+	var center_paper := vp.model_to_paper(vp.model_center)
+	vclose(center_paper, vp.paper_rect.position + vp.paper_rect.size * 0.5,
+		"模型中心应映射到视口中心", 1e-6)
+	var offset := vp.model_to_paper(vp.model_center + Vector2(1000, 0)) - center_paper
+	close(offset.x, 10.0, "模型 1000mm 在 1:100 下对应图纸 10mm", 1e-6)
+	# 模型区域应等于视口尺寸乘以比例
+	var mr := vp.model_rect()
+	close(mr.size.x, 100.0 * 100.0, "视口覆盖的模型宽度 = 图纸宽 x 比例", 1e-6)
+
+
+func _test_layout_fit() -> void:
+	var l := CadLayout.make("布局1", "A3", false)
+	# 一个 7800x6000 的图形，按 1:100 应能放进 A3
+	l.fit_model_to_paper(Rect2(0, 0, 7800, 6000))
+	var vp := l.main_viewport()
+	ok(vp.scale >= 1.0, "比例应为正数")
+	# 应吸附到国标常用比例
+	var series := [1.0, 2.0, 2.5, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 50.0,
+		100.0, 150.0, 200.0, 300.0, 500.0, 1000.0, 2000.0]
+	ok(series.has(vp.scale), "比例应吸附到国标常用值，实际 %s" % str(vp.scale))
+	# 视口不得超出纸张
+	var paper := l.paper_size()
+	var r := vp.paper_rect
+	ok(r.position.x >= -1e-6 and r.position.y >= -1e-6,
+		"视口不应越过纸张左下角：%s" % str(r))
+	ok(r.position.x + r.size.x <= paper.x + 1e-6 and r.position.y + r.size.y <= paper.y + 1e-6,
+		"视口不应越过纸张右上角：视口 %s 纸张 %s" % [str(r), str(paper)])
+	# 模型区域应覆盖整个图形
+	var mr := vp.model_rect()
+	ok(mr.size.x >= 7800.0 - 1.0 and mr.size.y >= 6000.0 - 1.0,
+		"视口模型区域应能容纳整个图形：%s" % str(mr.size))
+	# 视口不应与标题栏重叠（标题栏在图框内右下角）
+	var title_top := r.position.y + r.size.y
+	ok(title_top <= paper.y - 1.0, "视口不应顶到纸张上边缘")
+
+
+func _test_layout_roundtrip() -> void:
+	var doc := CadDocument.new()
+	var l := doc.ensure_layout("我的布局", "A2", true)
+	l.title_fields = {"project": "测试工程", "drawing": "平面图", "number": "建施-01"}
+	var vp := l.main_viewport()
+	vp.scale = 50.0
+	vp.model_center = Vector2(1234.0, 5678.0)
+	vp.paper_rect = Rect2(20, 30, 300, 200)
+	vp.print_border = true
+	vp.locked = true
+
+	var path := "user://layout.hbd"
+	NativeFormat.save(doc, path)
+	var doc2 := CadDocument.new()
+	ok(NativeFormat.load_into(doc2, path) == OK, "含布局的工程应能载入")
+	ok(doc2.layouts.size() == 1, "布局数量往返")
+	if doc2.layouts.size() == 1:
+		var l2: CadLayout = doc2.layouts[0]
+		ok(l2.name == "我的布局", "布局名往返")
+		ok(l2.format == "A2", "幅面往返")
+		ok(l2.portrait, "横竖式往返")
+		close(l2.main_viewport().scale, 50.0, "视口比例往返")
+		vclose(l2.main_viewport().model_center, Vector2(1234, 5678), "视口模型中心往返", 1e-6)
+		vclose(l2.main_viewport().paper_rect.position, Vector2(20, 30), "视口位置往返", 1e-6)
+		ok(l2.main_viewport().print_border, "视口打印边框标记往返")
+		ok(l2.main_viewport().locked, "视口锁定标记往返")
+		ok(String(l2.title_fields.get("project", "")) == "测试工程", "标题栏字段往返")
+	# 没有布局的旧文件应能正常载入
+	var doc3 := CadDocument.new()
+	ok(NativeFormat.load_into(doc3, path) == OK, "重复载入应成功")

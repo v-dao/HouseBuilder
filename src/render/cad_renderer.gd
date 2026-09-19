@@ -25,6 +25,11 @@ var dash_collapse_px: float = 2.0
 var max_segments: int = 400000
 ## 全局线型比例
 var ltscale: float = 1.0
+## 图纸空间视口的裁剪矩形（屏幕坐标）。enabled 为假时不裁剪。
+## 没有裁剪的话，视口外的模型内容会溢出到图纸的其他区域上。
+var clip_enabled := false
+var clip_rect := Rect2()
+
 ## 屏幕字高小于此像素数则跳过绘制
 var min_text_px: int = 5
 var max_text_px: int = 600
@@ -212,7 +217,50 @@ func _emit_curve(doc: CadDocument, bucket: PackedVector2Array, c: GeoCurve,
 	var model_pairs := PackedVector2Array()
 	_append_dashed(model_pairs, poly, pattern, c.is_closed())
 	if model_pairs.size() >= 2:
-		bucket.append_array(xf * model_pairs)
+		var screen_pairs := xf * model_pairs
+		if clip_enabled:
+			for k in range(0, screen_pairs.size() - 1, 2):
+				_push_seg(bucket, screen_pairs[k], screen_pairs[k + 1])
+		else:
+			bucket.append_array(screen_pairs)
+
+
+## 线段入桶。开启裁剪时先对屏幕空间的线段做矩形裁剪。
+func _push_seg(bucket: PackedVector2Array, a: Vector2, b: Vector2) -> void:
+	if not clip_enabled:
+		bucket.append(a)
+		bucket.append(b)
+		return
+	var r := _clip_seg_rect(a, b, clip_rect)
+	if r.size() == 2:
+		bucket.append(r[0])
+		bucket.append(r[1])
+
+
+## 线段对矩形裁剪（Liang-Barsky）
+static func _clip_seg_rect(a: Vector2, b: Vector2, r: Rect2) -> PackedVector2Array:
+	var dx := b.x - a.x
+	var dy := b.y - a.y
+	var t0 := 0.0
+	var t1 := 1.0
+	var p := PackedFloat64Array([-dx, dx, -dy, dy])
+	var q := PackedFloat64Array([a.x - r.position.x,
+		r.position.x + r.size.x - a.x,
+		a.y - r.position.y,
+		r.position.y + r.size.y - a.y])
+	for i in range(4):
+		if absf(p[i]) <= 1.0e-12:
+			if q[i] < 0.0:
+				return PackedVector2Array()
+		else:
+			var t := q[i] / p[i]
+			if p[i] < 0.0:
+				t0 = maxf(t0, t)
+			else:
+				t1 = minf(t1, t)
+	if t0 > t1:
+		return PackedVector2Array()
+	return PackedVector2Array([a + Vector2(dx, dy) * t0, a + Vector2(dx, dy) * t1])
 
 
 func _append_segments(bucket: PackedVector2Array, pts: PackedVector2Array, closed: bool) -> void:
@@ -221,12 +269,10 @@ func _append_segments(bucket: PackedVector2Array, pts: PackedVector2Array, close
 		return
 	var n := pts.size()
 	for i in range(n - 1):
-		bucket.append(pts[i])
-		bucket.append(pts[i + 1])
+		_push_seg(bucket, pts[i], pts[i + 1])
 	# 闭合折线补上首尾段（细分结果通常已首尾重合，故先判重）
 	if closed and n > 2 and not pts[0].is_equal_approx(pts[n - 1]):
-		bucket.append(pts[n - 1])
-		bucket.append(pts[0])
+		_push_seg(bucket, pts[n - 1], pts[0])
 	_seg_count += maxi(n - 1, 0)
 
 
@@ -304,8 +350,7 @@ func _emit_walls(doc: CadDocument, view_xf: Transform2D) -> void:
 			continue
 		var scr := view_xf * pts
 		for i in range(scr.size()):
-			bucket.append(scr[i])
-			bucket.append(scr[(i + 1) % scr.size()])
+			_push_seg(bucket, scr[i], scr[(i + 1) % scr.size()])
 		_seg_count += scr.size()
 
 
