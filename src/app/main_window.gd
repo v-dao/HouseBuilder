@@ -161,9 +161,10 @@ func _file_menu() -> MenuButton:
 	pop.add_item("另存为…", 2)
 	pop.add_separator()
 	pop.add_item("导出 DXF（R12，供 CAD 交换）", 3)
-	pop.add_item("导出 SVG 矢量图", 4)
-	pop.add_item("导出 PNG 光栅图", 5)
-	pop.add_item("插入国标图框", 6)
+	pop.add_item("导出 PDF（矢量出图）", 4)
+	pop.add_item("导出 SVG 矢量图", 5)
+	pop.add_item("导出 PNG 光栅图", 6)
+	pop.add_item("插入国标图框", 7)
 	pop.id_pressed.connect(func(id: int) -> void: _on_file_menu(id))
 	return mb
 
@@ -182,10 +183,12 @@ func _on_file_menu(id: int) -> void:
 		3:
 			_open_dialog(FileDialog.FILE_MODE_SAVE_FILE, ["*.dxf"], "导出 DXF", _do_export_dxf)
 		4:
-			_open_dialog(FileDialog.FILE_MODE_SAVE_FILE, ["*.svg"], "导出 SVG", _do_export_svg)
+			_open_dialog(FileDialog.FILE_MODE_SAVE_FILE, ["*.pdf"], "导出 PDF", _do_export_pdf)
 		5:
-			_open_dialog(FileDialog.FILE_MODE_SAVE_FILE, ["*.png"], "导出 PNG", _do_export_png)
+			_open_dialog(FileDialog.FILE_MODE_SAVE_FILE, ["*.svg"], "导出 SVG", _do_export_svg)
 		6:
+			_open_dialog(FileDialog.FILE_MODE_SAVE_FILE, ["*.png"], "导出 PNG", _do_export_png)
+		7:
 			viewport.run_command("SHEET")
 
 
@@ -258,7 +261,35 @@ func _do_export_dxf(path: String) -> void:
 		"" if Gbk.is_available() else "  ⚠ GBK 表缺失，中文已写成 ?"])
 
 
+func _do_export_pdf(path: String) -> void:
+	var w := PdfWriter.new()
+	w.plot_scale = doc.plot_scale
+	# 优先用系统仿宋；没有则退回内置字体；都没有时 PDF 仍能出，只是文字画成占位框
+	var font := FontManager.find_system_font("FangSong")
+	if font == "":
+		for p in FontManager.BUNDLED_FALLBACKS:
+			if FileAccess.file_exists(String(p)):
+				font = String(p)
+				break
+	var has_font := false
+	if font != "":
+		has_font = w.set_font(font)
+	var err := w.save(doc, path)
+	if err != OK:
+		prompt_label.text = "PDF 导出失败（错误码 %d）" % err
+		return
+	var f := FileAccess.open(path, FileAccess.READ)
+	var size := f.get_length() if f != null else 0
+	if f != null:
+		f.close()
+	_show_status("已导出矢量 PDF：%s（%.2f MB）%s" % [
+		path.get_file(), size / 1048576.0,
+		"" if has_font else "  ⚠ 未找到中文字体，文字以占位框表示"])
+
+
 func _do_export_svg(path: String) -> void:
+	var _unused := 0
+
 	var w := SvgWriter.new(doc.plot_scale)
 	var text := w.write(doc)
 	var f := FileAccess.open(path, FileAccess.WRITE)

@@ -14,6 +14,12 @@ func run() -> void:
 	_test_svg_structure()
 	_test_svg_escaping()
 
+	suite = "PDF 导出"
+	_test_pdf_structure()
+	_test_pdf_font_embedding()
+	_test_pdf_text_encoding()
+	_test_ttf_parser()
+
 	suite = "DXF 导出（R12）"
 	_test_dxf_structure()
 	_test_dxf_entities()
@@ -469,3 +475,161 @@ func _bytes_contain(hay: PackedByteArray, needle: PackedByteArray) -> bool:
 		if hit:
 			return true
 	return false
+
+
+# ---------------------------------------------------------------------------
+# PDF 导出
+#
+# 同样做结构化验证而不是"字符串包含"：解析对象表、交叉引用表与字体链，
+# 确认页尺寸、字体嵌入、ToUnicode 都在位。
+# ---------------------------------------------------------------------------
+
+func _pdf_doc() -> CadDocument:
+	var doc := CadDocument.new()
+	GbBlocks.install(doc)
+	doc.layers["文字"] = CadLayer.make("文字", Color(0.9, 0.9, 0.9), 7, "CONTINUOUS", 0.25)
+	var l := EntLine.make(Vector2(0, 0), Vector2(5000, 0))
+	doc.add_entity(l, false)
+	var t := EntText.make(Vector2(0, 500), "一层平面图", 250.0)
+	t.layer = "文字"
+	doc.add_entity(t, false)
+	var t2 := EntText.make(Vector2(0, 1000), "客厅", 250.0)
+	t2.layer = "文字"
+	doc.add_entity(t2, false)
+	return doc
+
+
+func _test_pdf_structure() -> void:
+	var doc := _pdf_doc()
+	var w := PdfWriter.new()
+	w.plot_scale = 100.0
+	var data := w.write(doc)
+	# 不嵌字体时不带字体数据，文件本就很小（几百字节量级），
+	# 这里只校验结构完整，字体相关的断言在下一个用例里
+	ok(data.size() > 300, "PDF 应有实质内容，实际 %d 字节" % data.size())
+	var head := data.slice(0, 8).get_string_from_utf8()
+	ok(head.begins_with("%PDF-1."), "应以 PDF 头开始，实际 %s" % head)
+	var tail := data.slice(maxi(data.size() - 32, 0)).get_string_from_utf8()
+	ok(tail.contains("%%EOF"), "应以 %%EOF 结束")
+	ok(tail.contains("startxref"), "应含 startxref")
+	ok(_bytes_contain(data, "xref".to_utf8_buffer()), "应含交叉引用表")
+	ok(_bytes_contain(data, "/Type /Catalog".to_utf8_buffer()), "应含 Catalog")
+	ok(_bytes_contain(data, "/Type /Pages".to_utf8_buffer()), "应含 Pages")
+	ok(_bytes_contain(data, "/Type /Page ".to_utf8_buffer()), "应含 Page")
+	# A3 横放：420x297mm -> 1190.55 x 841.89 pt
+	ok(_bytes_contain(data, "1190.551".to_utf8_buffer())
+		and _bytes_contain(data, "841.890".to_utf8_buffer()),
+		"页面尺寸应为 A3 横放（1190.551 x 841.890 pt）")
+
+
+func _test_pdf_font_embedding() -> void:
+	var doc := _pdf_doc()
+	var w := PdfWriter.new()
+	w.plot_scale = 100.0
+	var font := OS.get_system_font_path("FangSong", 400, 100, false)
+	if font == "" or not w.set_font(font):
+		# 系统没有仿宋时跳过嵌入相关的断言，但页面仍应能生成
+		ok(true, "系统无仿宋字体，跳过嵌入校验")
+		return
+	var data := w.write(doc)
+	ok(data.size() > 100000, "嵌入字体后 PDF 应有数 MB，实际 %d 字节" % data.size())
+	ok(_bytes_contain(data, "/Subtype /Type0".to_utf8_buffer()), "应使用 Type0 复合字体")
+	ok(_bytes_contain(data, "/Encoding /Identity-H".to_utf8_buffer()), "应使用 Identity-H 编码")
+	ok(_bytes_contain(data, "/Subtype /CIDFontType2".to_utf8_buffer()), "后代字体应为 CIDFontType2")
+	ok(_bytes_contain(data, "/CIDToGIDMap /Identity".to_utf8_buffer()), "应使用 Identity CIDToGIDMap")
+	ok(_bytes_contain(data, "/FontFile2".to_utf8_buffer()), "应嵌入字体文件")
+	ok(_bytes_contain(data, "/ToUnicode".to_utf8_buffer()),
+		"应含 ToUnicode CMap（否则文字无法搜索复制）")
+	ok(_bytes_contain(data, "beginbfchar".to_utf8_buffer()), "ToUnicode 应含字形到 Unicode 的映射表")
+	# ToUnicode 里应含「客」的映射（客 = U+5BA2）
+	ok(_bytes_contain(data, "5BA2".to_utf8_buffer()), "ToUnicode 应包含「客」的码点")
+
+
+func _test_pdf_text_encoding() -> void:
+	# 文字必须以字形序号写入，而不是 UTF-8 字节
+	var doc := _pdf_doc()
+	var w := PdfWriter.new()
+	var font := OS.get_system_font_path("FangSong", 400, 100, false)
+	if font == "" or not w.set_font(font):
+		ok(true, "系统无仿宋字体，跳过")
+		return
+	var data := w.write(doc)
+	# 内容流是 Flate 压缩的，必须先解压再查找明文指令
+	var plain := _pdf_plain_streams(data)
+	ok(plain.contains("Tj"), "应含文本绘制指令")
+	ok(plain.contains("BT /F1") and plain.contains("ET"), "文本应包在 BT/ET 之间")
+	ok(plain.contains("Tf"), "应设置字号")
+	ok(plain.contains(" Tm"), "应设置文字矩阵")
+	# 中文不应以 UTF-8 明文出现（那说明编码错了，阅读器会用默认字体渲染成乱码）
+	ok(not plain.contains("一层平面图"), "中文不应以 UTF-8 明文写入内容流")
+
+
+## TTF 解析器：cmap / hmtx / head 三个关键表
+func _test_ttf_parser() -> void:
+	var font := OS.get_system_font_path("FangSong", 400, 100, false)
+	if font == "":
+		ok(true, "系统无仿宋字体，跳过")
+		return
+	var t := Ttf.new()
+	ok(t.load_from_file(font), "应能解析仿宋字体")
+	ok(t.ok, "解析结果应有效")
+	ok(t.units_per_em > 0, "unitsPerEm 应大于 0，实际 %d" % t.units_per_em)
+	ok(t.glyph_count() > 1000, "仿宋字形数应上千，实际 %d" % t.glyph_count())
+	# 常用字的字形序号应能找到且各异
+	var g1 := t.glyph_id("一".unicode_at(0))
+	var g2 := t.glyph_id("层".unicode_at(0))
+	ok(g1 > 0, "「一」应有字形序号")
+	ok(g2 > 0, "「层」应有字形序号")
+	ok(g1 != g2, "不同汉字应有不同字形序号")
+	ok(t.has_glyph("A".unicode_at(0)), "ASCII 也应在 cmap 中")
+	# 字宽应为正数
+	ok(t.advance_1000(g1) > 0, "字宽应为正，实际 %d" % t.advance_1000(g1))
+	# 上伸部/下伸部：仿宋的上伸应为正、下伸应为负
+	ok(t.ascent_1000() > 0, "ascent 应为正，实际 %d" % t.ascent_1000())
+	ok(t.descent_1000() < 0, "descent 应为负，实际 %d" % t.descent_1000())
+
+
+## 把 PDF 里所有 Flate 压缩的流解压并拼接，便于按明文查找绘制指令。
+## 直接对二进制做字符串查找是行不通的：内容流是压缩的，且非法 UTF-8 会被替换。
+func _pdf_plain_streams(data: PackedByteArray) -> String:
+	var out := ""
+	var marker := "stream\n".to_utf8_buffer()
+	var endmarker := "\nendstream".to_utf8_buffer()
+	var i := 0
+	while i < data.size():
+		# 找下一个 stream 关键字
+		var s_at := -1
+		for k in range(i, data.size() - marker.size() + 1):
+			var hit := true
+			for m in range(marker.size()):
+				if data[k + m] != marker[m]:
+					hit = false
+					break
+			if hit:
+				s_at = k
+				break
+		if s_at < 0:
+			break
+		var body_start := s_at + marker.size()
+		# 找对应的 endstream
+		var e_at := -1
+		for k in range(body_start, data.size() - endmarker.size() + 1):
+			var hit2 := true
+			for m in range(endmarker.size()):
+				if data[k + m] != endmarker[m]:
+					hit2 = false
+					break
+			if hit2:
+				e_at = k
+				break
+		if e_at < 0:
+			break
+		var body := data.slice(body_start, e_at)
+		# 是 Flate 流就解压；否则按原样解码
+		var inflated := body.decompress_dynamic(1 << 22, FileAccess.COMPRESSION_DEFLATE)
+		if inflated.is_empty():
+			out += body.get_string_from_utf8()
+		else:
+			out += inflated.get_string_from_utf8()
+		i = e_at + endmarker.size()
+	return out
