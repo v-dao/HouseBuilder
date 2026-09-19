@@ -333,12 +333,27 @@ func _on_button(event: InputEventMouseButton) -> void:
 			mouse_default_cursor_shape = Control.CURSOR_DRAG if _panning else Control.CURSOR_CROSS
 		MOUSE_BUTTON_LEFT:
 			if event.pressed:
+				# 双击文字直接进入改文字命令（CAD 的通用习惯）
+				if event.double_click and active_command == null:
+					if _try_edit_text_at(event.position):
+						return
 				_on_left_down(event.position)
 			else:
 				_on_left_up(event.position)
 		MOUSE_BUTTON_RIGHT:
 			if event.pressed:
 				_on_right_click()
+
+
+## 双击文字图元时启动改文字命令。返回是否已处理。
+func _try_edit_text_at(screen_pos: Vector2) -> bool:
+	var m := view.to_model(screen_pos)
+	var tol := view.tolerance_for_pixels(pick_aperture_px)
+	var e := CadSelection.pick(doc, index, m, tol)
+	if e == null or not (e is EntText or e is EntMText):
+		return false
+	start_command(CmdText.TextChange.new(), {"entity": e})
+	return true
 
 
 func _on_left_down(screen_pos: Vector2) -> void:

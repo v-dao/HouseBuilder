@@ -18,6 +18,9 @@ const DEFS := [
 	["SPLINE", ["SPL", "样条"], "绘制", "样条曲线：依次点取型值点，回车结束"],
 	["POINT", ["PO", "点"], "绘制", "点：点取位置"],
 	["XLINE", ["XL", "构造线"], "绘制", "构造线：一点 + 方向（双向无限，作辅助线用）"],
+	["TEXT", ["DT", "T", "文字"], "绘制", "单行文字：位置 + 字高 + 内容"],
+	["MTEXT", ["MT", "多行文字"], "绘制", "多行文字：字宽框 + 字高 + 内容（支持自动换行与分段）"],
+	["TEXTEDIT", ["ED", "DDEDIT", "改文字"], "编辑", "修改文字：点取文字图元后改内容"],
 
 	# --- 编辑 ---
 	["ERASE", ["E", "删除"], "编辑", "删除选中的图元"],
@@ -223,6 +226,12 @@ static func create(name: String) -> CadCommand:
 			return CmdSymbol.BreakLine.new(true)
 		"AXISBUBBLE":
 			return CmdSymbol.AxisBubble.new()
+		"TEXT":
+			return CmdText.TextSingle.new()
+		"MTEXT":
+			return CmdText.TextMulti.new()
+		"TEXTEDIT":
+			return CmdText.TextChange.new()
 	return null
 
 

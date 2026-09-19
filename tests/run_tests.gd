@@ -75,6 +75,10 @@ func _initialize() -> void:
 	p2c.run()
 	_T.merge(p2c)
 
+	var p2d := P2dTests.new()
+	p2d.run()
+	_T.merge(p2d)
+
 	_sync_counts()
 	_print_summary()
 	quit(0 if _T.fail_count == 0 else 1)
