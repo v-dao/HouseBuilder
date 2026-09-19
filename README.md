@@ -62,7 +62,11 @@
 
 ## 版本管理
 
-分支 `main`，目前无远程仓库（异地备份需自行 `git remote add`）。
+分支 `main`，远程为 `origin` = `git@github.com:v-dao/HouseBuilder.git`（SSH）。
+
+```bash
+git push origin main        # 推送；首次已用 -u 建立跟踪，之后 git push 即可
+```
 
 **刻意不纳入版本控制的东西**（见 `.gitignore`），一句话理由：
 
