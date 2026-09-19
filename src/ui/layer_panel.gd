@@ -153,6 +153,9 @@ func _check(on: bool, cb: Callable) -> CheckBox:
 
 
 func _emit() -> void:
+	# 图层属性变化必须让文档版本号递增，否则渲染缓存不会失效
+	if doc != null:
+		doc.bump()
 	refresh()
 	changed.emit()
 
@@ -167,6 +170,7 @@ func _on_add_layer() -> void:
 	# 新图层按国标线宽组的细线起步，颜色给固定的白
 	doc.layers[n] = CadLayer.make(n, Color.WHITE, 7, "CONTINUOUS", 0.25, "新建图层")
 	doc.current_layer = n
+	doc.bump()
 	_name_edit.text = ""
 	_hint.text = "已新建图层「%s」" % n
 	refresh()

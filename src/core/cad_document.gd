@@ -170,6 +170,13 @@ func touch(e: CadEntity) -> void:
 	_bump()
 
 
+## 公开的"内容已变"通知。
+## 凡是不经 add/remove/mark_modified 的改动（例如图层面板改可见性、
+## 改图层颜色）都必须调它 —— 否则渲染缓存不会失效，画面不会更新。
+func bump() -> void:
+	_bump()
+
+
 func _bump() -> void:
 	revision += 1
 	changed.emit()

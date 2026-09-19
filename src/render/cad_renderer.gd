@@ -63,6 +63,19 @@ var _seg_count: int = 0
 var _overflow := false
 ## 上次构建几何时的可见图元数，供缓存命中时的统计使用
 var _cached_drawn: int = 0
+
+## 辅助图元的清单：文字、点、实心填充。
+##
+## 它们与普通几何的区别：像素尺寸与颜色**每帧都要按当前视图重解析**，
+## 而"哪些图元是文字/点/实心填充"只随文档变化。
+## 因此缓存清单（按文档版本），每帧只重解析尺寸与颜色。
+##
+## 教训：这些图元曾被放进"缓存命中就跳过"的图元遍历里，
+## 结果只有缩放（缓存重建）时文字才出现 —— 典型的缓存边界划错。
+var _aux_text: Array = []
+var _aux_points: Array = []
+var _aux_solids: Array = []
+var _aux_revision := -1
 ## 点的显示半径（屏幕像素，恒定不随缩放变化）
 var point_size_px: float = 4.0
 
@@ -78,10 +91,19 @@ var grip_size_px: float = 3.5
 ## 主入口。在 CanvasItem 的 _draw() 中调用。
 func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 		selection: Array[CadEntity] = []) -> void:
-	# 文字/点/实心填充每帧都要重建，所以在入口就清
+	# 辅助图元每帧重建：清单按文档缓存，尺寸与颜色按当前视图重解析。
+	# 必须在几何缓存判断**之前**做 —— 它们与几何缓存无关。
+	_build_aux_lists(doc)
 	_text_items.clear()
 	_point_items.clear()
 	_solid_items.clear()
+	for te in _aux_text:
+		for a in (te as CadEntity).get_annotation_texts():
+			_collect_text(doc, view, te, a)
+	for pe in _aux_points:
+		_collect_point(doc, view, pe as EntPoint)
+	for he in _aux_solids:
+		_collect_solid(doc, view, he as EntHatch)
 	# 注意：_seg_count / _overflow / _cached_drawn 只在**重建**时清。
 	# 放在这里会让缓存命中时读到被清零的值（统计全部显示 0）。
 
@@ -126,13 +148,10 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 		if not vr.intersects(e.get_bbox()):
 			culled += 1
 			continue
-		# 文字注记与几何是两条独立通道：尺寸标注同时有尺寸线（几何）
-		# 和尺寸数字（文字），所以这里不能写成二选一。
-		for a in e.get_annotation_texts():
-			_collect_text(doc, view, e, a)
-
+		# 文字注记由辅助通道处理（见 draw 开头），这里不再收集。
+		# 注意：尺寸标注同时有尺寸线（几何）和尺寸数字（文字），
+		# 所以它既要走这里入桶，也要出现在辅助清单里。
 		if e.type == CadEntity.Type.POINT:
-			_collect_point(doc, view, e as EntPoint)
 			drawn += 1
 			continue
 
@@ -149,9 +168,8 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 			drawn += 1
 			continue
 
-		# 实心填充（剖切墙体等）需要真正填面，不能在线上做文章
+		# 实心填充已由辅助通道处理，这里跳过（它不产生线几何）
 		if e.type == CadEntity.Type.HATCH and (e as EntHatch).is_solid():
-			_collect_solid(doc, view, e as EntHatch)
 			drawn += 1
 			continue
 
@@ -198,6 +216,29 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 		"solids": _solid_items.size(),
 		"overflow": _overflow,
 	}
+
+
+## 构建辅助图元清单（按文档版本缓存）。
+## 清单本身与视图无关，只有尺寸/颜色的解析才依赖视图。
+func _build_aux_lists(doc: CadDocument) -> void:
+	if _aux_revision == doc.revision:
+		return
+	_aux_revision = doc.revision
+	_aux_text.clear()
+	_aux_points.clear()
+	_aux_solids.clear()
+	for e in doc.entities:
+		if not e.visible:
+			continue
+		# 图层可见性也要过滤（图元自身的 visible 只管自己）
+		if not doc.is_layer_visible(e.layer):
+			continue
+		if not e.get_annotation_texts().is_empty():
+			_aux_text.append(e)
+		if e.type == CadEntity.Type.POINT:
+			_aux_points.append(e)
+		elif e.type == CadEntity.Type.HATCH and (e as EntHatch).is_solid():
+			_aux_solids.append(e)
 
 
 ## 几何缓存的键。缩放按档位量化，避免连续缩放时每帧都重建。

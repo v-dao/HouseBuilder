@@ -22,7 +22,15 @@ func _ready() -> void:
 	await _settle()
 
 	var vp = app.get("viewport")
-	await _shot("res://tests/out/_app.png", "全图")
+	var img1 := await _shot("res://tests/out/_app.png", "全图")
+
+	# 关键回归检查：不改视图再抓一帧，这一帧走的是几何缓存**命中**路径。
+	# 曾经文字只在缩放（缓存重建）时出现 —— 因为文字被错误地放进了
+	# "缓存命中就跳过"的图元遍历里。连抓两帧做像素比对即可兜住它。
+	var img2 := await _shot("res://tests/out/_app_cached.png", "全图（缓存命中）")
+	var diff := _diff_ratio(img1, img2)
+	print("[regression] 缓存命中帧与重建帧的像素差异 = %.4f%%  %s" % [
+		diff * 100.0, "通过" if diff < 0.0005 else "**失败：两帧不一致，缓存边界有问题**"])
 	_report(vp)
 
 	# 放大 + 线宽显示，核对国标线宽体系与虚线/点画线
@@ -111,11 +119,28 @@ func _settle() -> void:
 		await RenderingServer.frame_post_draw
 
 
-func _shot(path: String, label: String) -> void:
+func _shot(path: String, label: String) -> Image:
 	await RenderingServer.frame_post_draw
 	var img := get_viewport().get_texture().get_image()
 	var err := img.save_png(path)
 	print("[capture] %s -> %s (err=%d)" % [label, path, err])
+	return img
+
+
+## 抽样比对两张图的像素差异比例
+func _diff_ratio(a: Image, b: Image) -> float:
+	if a.get_width() != b.get_width() or a.get_height() != b.get_height():
+		return 1.0
+	var total := 0
+	var n := 0
+	for y in range(0, a.get_height(), 3):
+		for x in range(0, a.get_width(), 3):
+			total += 1
+			var ca := a.get_pixel(x, y)
+			var cb := b.get_pixel(x, y)
+			if absf(ca.r - cb.r) > 0.02 or absf(ca.g - cb.g) > 0.02 or absf(ca.b - cb.b) > 0.02:
+				n += 1
+	return float(n) / float(maxi(total, 1))
 
 
 func _report(vp) -> void:

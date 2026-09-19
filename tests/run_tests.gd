@@ -12,9 +12,15 @@ var _suite := ""
 ## 因为 --script 要求本类 extends SceneTree，GDScript 没有多继承，
 ## 无法再继承 TestSuite。
 var _T := TestSuite.new()
+## 渲染测试要往场景树上挂 CanvasItem（渲染器内部会调 draw_* 接口）
+var _test_root: Node = null
 
 
 func _initialize() -> void:
+	# 建一个根节点承载渲染测试用的 CanvasItem
+	_test_root = Node.new()
+	_test_root.name = "TestRoot"
+	root.add_child(_test_root)
 	_suite = "Bulge 圆弧参数"
 	_test_bulge_from_angle()
 	_test_bulge_semicircle()
@@ -94,6 +100,13 @@ func _initialize() -> void:
 	var p6 := P6Tests.new()
 	p6.run()
 	_T.merge(p6)
+
+	# 渲染测试需要真实（哪怕是 dummy）的渲染环境来承载 CanvasItem，
+	# 因此挂在场景树上再跑。
+	var rt := RenderTests.new()
+	rt._root = _test_root
+	rt.run()
+	_T.merge(rt)
 
 	_sync_counts()
 	_print_summary()
