@@ -37,6 +37,7 @@ var _bucket_pts: Dictionary = {}
 var _bucket_meta: Dictionary = {}
 var _text_items: Array = []
 var _point_items: Array = []
+var _solid_items: Array = []
 var _seg_count: int = 0
 var _overflow := false
 ## 点的显示半径（屏幕像素，恒定不随缩放变化）
@@ -58,6 +59,7 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 	_bucket_meta.clear()
 	_text_items.clear()
 	_point_items.clear()
+	_solid_items.clear()
 	_seg_count = 0
 	_overflow = false
 
@@ -83,6 +85,12 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 			drawn += 1
 			continue
 
+		# 实心填充（剖切墙体等）需要真正填面，不能在线上做文章
+		if e.type == CadEntity.Type.HATCH and (e as EntHatch).is_solid():
+			_collect_solid(doc, view, e as EntHatch)
+			drawn += 1
+			continue
+
 		var color := doc.resolve_color(e)
 		if color.a > 0.001:
 			var width := _resolve_width(doc, e)
@@ -93,6 +101,7 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 		drawn += 1
 
 	_flush(ci)
+	_draw_solids(view, ci)
 	_draw_points(doc, view, ci)
 	var texts_drawn := _draw_texts(doc, view, ci)
 	if not selection.is_empty():
@@ -106,6 +115,7 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 		"texts": _text_items.size(),
 		"texts_drawn": texts_drawn,
 		"points": _point_items.size(),
+		"solids": _solid_items.size(),
 		"overflow": _overflow,
 	}
 
@@ -304,6 +314,28 @@ func hit_grip(view: ViewTransform, sel: Array[CadEntity], screen_pos: Vector2,
 			if view.to_screen(pts[i]).distance_to(screen_pos) <= aperture_px:
 				return {"entity": e, "index": i}
 	return {}
+
+
+## 收集实心填充的轮廓。实心填充必须在所有线之前绘制，
+## 否则后画的填充会盖住先画的墙线。
+func _collect_solid(doc: CadDocument, view: ViewTransform, h: EntHatch) -> void:
+	var ring := h.boundary_closed()
+	if ring.size() < 3:
+		return
+	var scr := PackedVector2Array()
+	var xf := view.transform()
+	for q in ring:
+		scr.append(xf * q)
+	_solid_items.append({"poly": scr, "color": doc.resolve_color(h), "alpha": doc.resolve_color(h).a})
+
+
+func _draw_solids(_view: ViewTransform, ci: CanvasItem) -> void:
+	for item in _solid_items:
+		var poly: PackedVector2Array = item["poly"]
+		if poly.size() < 3:
+			continue
+		var col: Color = item["color"]
+		ci.draw_colored_polygon(poly, Color(col.r, col.g, col.b, maxf(col.a, 1.0)))
 
 
 func _collect_point(doc: CadDocument, _view: ViewTransform, p: EntPoint) -> void:

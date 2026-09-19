@@ -280,18 +280,61 @@ static func _add_linear_chain(doc: CadDocument, stops: Array, y: float) -> void:
 		doc.add_entity(d, false)
 
 
-## 图例框：在图纸左下角画一个小方框并填充 45° 素线，
-## 顺便验证"填充线不压文字"的图面组织
+## 材料图例展示条：用国标图例库生成若干常用建筑材料的填充，
+## 每个图例下方标注名称，便于一眼核对图案与国标是否一致。
 static func _add_hatch_legend(doc: CadDocument, hatch_layer: String, txt_layer: String) -> void:
-	var box := Rect2(-4600.0, -1400.0, 1400.0, 1400.0)
-	_add_poly(doc, hatch_layer, _rect_poly(box.position.x, box.position.y, box.size.x, box.size.y), true)
-	_add_hatch_lines(doc, hatch_layer, box, 200.0, PI * 0.25)
-	var t := EntText.make(Vector2(box.position.x + box.size.x * 0.5, box.position.y + box.size.y + 260.0),
-		"素土夯实", 320.0)
-	t.text_style = "仿宋_3.5"
-	t.h_align = EntText.HAlign.CENTER
-	_put(t, txt_layer)
-	doc.add_entity(t, false)
+	var patterns := ["钢筋混凝土", "多孔材料", "夯土" if false else "夯实土壤",
+		"天然石材", "松散保温材料", "金属"]
+	# 放在图面最下方、图名左侧的空位，避免压住尺寸链
+	var cell := 800.0
+	var gap := 200.0
+	var x0 := -7000.0
+	var y0 := -5600.0
+	for i in range(patterns.size()):
+		var bx := x0 + float(i) * (cell + gap)
+		var box := Rect2(bx, y0, cell, cell)
+		# 边界轮廓
+		_add_poly(doc, hatch_layer, _rect_poly(box.position.x, box.position.y,
+			box.size.x, box.size.y), true)
+		# 国标图案填充
+		var h := EntHatch.make(PackedVector2Array([
+			Vector2(box.position.x, box.position.y),
+			Vector2(box.position.x + box.size.x, box.position.y),
+			Vector2(box.position.x + box.size.x, box.position.y + box.size.y),
+			Vector2(box.position.x, box.position.y + box.size.y),
+		]), patterns[i])
+		h.origin = box.position
+		# 图例格子很小，按出图比例 1:100 时图案会太稀，故整体缩小图案比例
+		h.pattern_scale = 0.35
+		_put(h, hatch_layer)
+		doc.add_entity(h, false)
+		# 名称
+		var t := EntText.make(Vector2(box.position.x + box.size.x * 0.5,
+			box.position.y - 180.0), patterns[i], 220.0)
+		t.text_style = "仿宋_3.5"
+		t.h_align = EntText.HAlign.CENTER
+		_put(t, txt_layer)
+		doc.add_entity(t, false)
+
+	# 实心填充示例：建筑平面图中被剖切的墙体常用实心 poché 表示
+	var solid_box := Rect2(x0 + float(patterns.size()) * (cell + gap), y0, cell, cell)
+	_add_poly(doc, hatch_layer, _rect_poly(solid_box.position.x, solid_box.position.y,
+		solid_box.size.x, solid_box.size.y), true)
+	var hs := EntHatch.make(PackedVector2Array([
+		Vector2(solid_box.position.x, solid_box.position.y),
+		Vector2(solid_box.position.x + solid_box.size.x, solid_box.position.y),
+		Vector2(solid_box.position.x + solid_box.size.x, solid_box.position.y + solid_box.size.y),
+		Vector2(solid_box.position.x, solid_box.position.y + solid_box.size.y),
+	]), "实心")
+	hs.solid = true
+	_put(hs, hatch_layer)
+	doc.add_entity(hs, false)
+	var ts := EntText.make(Vector2(solid_box.position.x + solid_box.size.x * 0.5,
+		solid_box.position.y - 180.0), "实心填充", 220.0)
+	ts.text_style = "仿宋_3.5"
+	ts.h_align = EntText.HAlign.CENTER
+	_put(ts, txt_layer)
+	doc.add_entity(ts, false)
 
 
 ## 七种国标符号的示例。放在图面左下方，便于一眼核对画法。
