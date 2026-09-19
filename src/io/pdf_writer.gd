@@ -15,6 +15,9 @@ extends RefCounted
 
 ## 纸张尺寸（mm）。默认 A3 横放。
 var paper := Vector2(420.0, 297.0)
+## 若指定布局，则按布局出图：纸张取布局幅面、内容经布局视口变换，
+## 并连同图框与标题栏一起输出 —— 这才是真正的"所见即所得"出图。
+var layout: CadLayout = null
 ## 出图比例（1:100 记 100）。模型毫米 / 该比例 = 图纸毫米。
 var plot_scale := 100.0
 ## 模型空间 -> 图纸空间的自适应缩放（内容超出纸张时自动缩小）
@@ -93,6 +96,13 @@ func _font_name() -> String:
 # ---------------------------------------------------------------------------
 
 func _compute_page_transform(doc: CadDocument) -> void:
+	if layout != null:
+		# 按布局出图：纸张取布局幅面，内容按视口比例摆放。
+		# 此时 view 的语义是"图纸毫米"，与纸张坐标一致，故比例恒为 1。
+		paper = layout.paper_size()
+		_page_scale = 1.0
+		_page_offset = Vector2.ZERO
+		return
 	var bb := doc.get_bbox()
 	if bb.size.x <= 0.0 and bb.size.y <= 0.0:
 		bb = Rect2(0, 0, 100, 100)
@@ -124,6 +134,9 @@ func _pt(p: Vector2) -> Vector2:
 # ---------------------------------------------------------------------------
 
 func _emit_content(doc: CadDocument, out: PackedByteArray) -> void:
+	if layout != null:
+		_emit_layout(doc, out)
+		return
 	var names := doc.layer_names()
 	for name in names:
 		var l: CadLayer = doc.layers.get(name)
@@ -133,6 +146,57 @@ func _emit_content(doc: CadDocument, out: PackedByteArray) -> void:
 			if e.layer != name or not e.visible:
 				continue
 			_emit_entity(doc, e, l, out)
+
+
+## 按布局出图：白底 + 图框/标题栏/会签栏 + 视口内的模型内容。
+## 模型内容按「模型 -> 图纸」变换后绘制，不做裁剪 ——
+## 出图时视口本身是按图形范围算出来的，正常不会溢出。
+func _emit_layout(doc: CadDocument, out: PackedByteArray) -> void:
+	var paper_size := layout.paper_size()
+	# 纸张底色
+	out.append_array(_bytes("q 1 1 1 rg 0 0 %.3f %.3f re f Q
+" % [
+		paper_size.x * MM2PT, paper_size.y * MM2PT]))
+	# 图框 + 标题栏 + 会签栏：按 1:1 图纸尺寸生成到临时文档后绘制
+	var fd := CadDocument.new()
+	fd.plot_scale = 1.0
+	GbSheet.build_frame(fd, layout.format, layout.portrait, layout.title_fields)
+	var saved_doc := doc
+	# 图框在图纸坐标系里，比例恒为 1
+	_page_scale = 1.0
+	_page_offset = Vector2.ZERO
+	for name in fd.layer_names():
+		var l: CadLayer = fd.layers[name]
+		for e in fd.entities:
+			if e.layer == name and e.visible:
+				_emit_entity(fd, e, l, out)
+	# 各视口内的模型内容
+	for v in layout.viewports:
+		var vp := v as CadLayout.PaperView
+		# 模型 -> 图纸：先减去模型中心，除以比例，再平移到视口中心
+		for name2 in saved_doc.layer_names():
+			var l2: CadLayer = saved_doc.layers[name2]
+			if not l2.is_displayable():
+				continue
+			for e2 in saved_doc.entities:
+				if e2.layer != name2 or not e2.visible:
+					continue
+				_emit_entity_in_view(saved_doc, e2, l2, vp, out)
+
+
+## 在视口变换下输出图元。做法是把图元坐标先经「模型->图纸」再走常规的 _pt()。
+func _emit_entity_in_view(doc: CadDocument, e: CadEntity, l: CadLayer,
+		vp: CadLayout.PaperView, out: PackedByteArray) -> void:
+	var saved := _page_offset
+	var saved_scale := _page_scale
+	# _pt() 内部是 p * _page_scale + _page_offset，而视口变换是
+	# (p - model_center)/scale + 视口中心，两者可以合并成仿射形式：
+	#   缩放 = 1/scale，偏移 = 视口中心 - model_center/scale
+	_page_scale = 1.0 / maxf(vp.scale, 1.0e-9)
+	_page_offset = vp.paper_rect.position + vp.paper_rect.size * 0.5 - vp.model_center * _page_scale
+	_emit_entity(doc, e, l, out)
+	_page_scale = saved_scale
+	_page_offset = saved
 
 
 func _emit_entity(doc: CadDocument, e: CadEntity, l: CadLayer, out: PackedByteArray) -> void:

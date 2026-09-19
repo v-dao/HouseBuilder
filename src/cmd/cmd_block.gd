@@ -102,6 +102,11 @@ class BlockCmd extends BlockBase:
 				if t == "":
 					return false
 				_name = t
+				# 块名已存在 -> 就是"重定义块"的用法（AutoCAD 的 BLOCK 行为）。
+				# 这是编辑块的标准流程：分解引用 -> 改图元 -> 用同一个名字重建。
+				if ctx.doc.blocks.has(_name):
+					ctx.set_status("块「%s」已存在，将重定义并由 %d 处引用同步更新。" % [
+						_name, _count_refs(_name)])
 				_state = S_KEEP
 				ctx.set_status(prompt())
 				return false
@@ -109,6 +114,15 @@ class BlockCmd extends BlockBase:
 				_finish_block(not t.to_upper().begins_with("N"))
 				return true
 		return false
+
+	## 统计某个块被多少处引用
+	func _count_refs(name: String) -> int:
+		var n := 0
+		for e in ctx.doc.entities:
+			if e is EntInsert and (e as EntInsert).block_name == name:
+				n += 1
+		return n
+
 
 	func _finish_block(keep: bool) -> void:
 		var blk := CadBlock.make(_name, _base)
@@ -122,18 +136,27 @@ class BlockCmd extends BlockBase:
 			c.handle = 0
 			c.transform_by(to_local)
 			blk.add(c)
+		var redefine := ctx.doc.blocks.has(_name)
+		var refs := _count_refs(_name)
 		ctx.doc.blocks[_name] = blk
-		# 用块引用替换原对象
-		var ins := EntInsert.make(_name, _base)
-		ins.layer = ctx.doc.current_layer
-		ins.aci = ctx.doc.current_aci
-		ctx.doc.add_entity(ins)
+		# 重定义且已有引用时不再新增引用 —— 那些引用会自动指向新定义，
+		# 用户是在"编辑块"，不是"再插一个"。
+		# 块引用通过块名解析几何，因此无需逐个通知更新。
+		if not (redefine and refs > 0):
+			var ins := EntInsert.make(_name, _base)
+			ins.layer = ctx.doc.current_layer
+			ins.aci = ctx.doc.current_aci
+			ctx.doc.add_entity(ins)
 		if not keep:
 			for e in ctx.selection.items:
 				ctx.doc.remove_entity(e)
 		ctx.selection.clear()
 		ctx.doc.commit_transaction()
-		ctx.set_status("已定义块「%s」，含 %d 个对象" % [_name, blk.entities.size()])
+		if redefine:
+			ctx.set_status("已重定义块「%s」（%d 个对象），%d 处引用已同步更新" % [
+				_name, blk.entities.size(), refs])
+		else:
+			ctx.set_status("已定义块「%s」，含 %d 个对象" % [_name, blk.entities.size()])
 
 	func cancel() -> void:
 		_abort()

@@ -32,9 +32,12 @@ const DEFS := [
 	["ROOM", ["RM", "房间"], "建筑", "房间：点取内部一点，自动算净面积并标注"],
 	["STAIR", ["ST", "楼梯"], "建筑", "参数化双跑楼梯：踏步数/踏步宽/梯段宽/平台深"],
 	["SCHEDULE", ["SCHED", "门窗表"], "建筑", "门窗表：统计门窗洞口并生成表格"],
+	["SHEETLIST", ["图纸目录"], "建筑", "图纸目录：统计各布局的图名图号并生成表格"],
+	["MATLIST", ["材料做法表"], "建筑", "材料做法表：按标准做法模板生成表格"],
 	["TEXT", ["DT", "T", "文字"], "绘制", "单行文字：位置 + 字高 + 内容"],
 	["MTEXT", ["MT", "多行文字"], "绘制", "多行文字：字宽框 + 字高 + 内容（支持自动换行与分段）"],
 	["TEXTEDIT", ["ED", "DDEDIT", "改文字"], "编辑", "修改文字：点取文字图元后改内容"],
+	["QSELECT", ["QS", "快速选择"], "编辑", "快速选择：按类型/图层/颜色筛选并选中"],
 
 	# --- 编辑 ---
 	["ERASE", ["E", "删除"], "编辑", "删除选中的图元"],
@@ -270,6 +273,12 @@ static func create(name: String) -> CadCommand:
 			return CmdArch.StairCmd.new()
 		"SCHEDULE":
 			return CmdArch.ScheduleCmd.new()
+		"QSELECT":
+			return CmdTables.QuickSelect.new()
+		"SHEETLIST":
+			return CmdTables.SheetList.new()
+		"MATLIST":
+			return CmdTables.MaterialTable.new()
 	return null
 
 

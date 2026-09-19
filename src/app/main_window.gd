@@ -559,6 +559,7 @@ func _attach_doc() -> void:
 	viewport.setup(doc)
 	if prop_panel != null:
 		prop_panel.setup(doc, viewport)
+		viewport.prop_panel_ref = prop_panel
 	if layer_panel != null:
 		layer_panel.setup(doc)
 	_refresh_status()

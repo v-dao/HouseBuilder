@@ -20,6 +20,12 @@ func request_redraw() -> void:
 		viewport.queue_redraw()
 
 
+## 命令里改了选择集后调用，让界面（状态栏、特性面板）同步刷新
+func notify_selection_changed() -> void:
+	if viewport != null and viewport.has_method("notify_selection_changed"):
+		viewport.notify_selection_changed()
+
+
 func set_status(msg: String) -> void:
 	if viewport != null and viewport.has_method("set_prompt"):
 		viewport.set_prompt(msg)

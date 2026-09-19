@@ -90,6 +90,50 @@ static func from_dict(d: Dictionary) -> EntLine:   # 静态工厂
 **新增实体类型时，`from_dict()` 里必须调用 `read_base_fields(d)`**，
 否则图层/颜色/线宽会在存读档与撤销恢复时丢失（这个 bug 已被单元测试捕获过一次）。
 
+## 5a. 内部类看不见外部类的静态方法
+
+```gdscript
+class_name CmdArch
+extends RefCounted
+
+static func _line(doc, a, b) -> void:
+	...
+
+class WallCmd extends CadCommand:
+	func build() -> void:
+		_line(ctx.doc, a, b)            # 报错：Function "_line()" not found in base self.
+		CmdArch._line(ctx.doc, a, b)    # 正确
+```
+
+GDScript 的内部类**不继承**外部类的成员，静态方法也不行，必须写限定名。
+本项目已因此踩过两次：`CmdArch._line`、`CmdTables._build_table`。
+
+## 5b. 内部类名不能与引擎原生类重名
+
+```gdscript
+class Viewport:      # 报错：Class "Viewport" hides a native class
+	extends RefCounted
+class TextEdit:      # 同样报错
+	extends CadCommand
+```
+
+Godot 的原生类名（`Viewport`、`TextEdit`、`Label`、`Timer`、`Curve2D`……）被占用。
+本项目已因此改名两次：`CmdText.TextEdit` → `TextChange`、
+`CadLayout.Viewport` → `PaperView`。
+
+**取内部类名之前先查一下是否有同名原生类**，比改完再报错省事。
+
+## 5c. 条件表达式不能当语句用
+
+```gdscript
+out += String.chr(cp) if cp != null else "?"   # 报错或被解析成 (out += X) if cond else Y
+```
+
+GDScript 的运算符优先级会把它解析成非法语句，必须写成 if/else 分支。
+另外用 `python -c "..."` 内嵌引号生成代码时，双引号可能被 shell 吃掉，
+导致 `var out := ""` 变成 `var out :=`（空表达式）。
+**结构性改动一律走补丁文件，不用 `python -c` 内嵌引号。**
+
 ## 6. `class_name` 全局类需要先生成缓存
 
 新克隆的项目或新建脚本后，直接跑会报 `Identifier "Xxx" not declared in the current scope`。

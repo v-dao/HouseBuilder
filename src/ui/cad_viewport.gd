@@ -115,6 +115,18 @@ func selection_items() -> Array[CadEntity]:
 	return ctx.selection.items
 
 
+## 供命令在改动选择集后主动通知界面
+func notify_selection_changed() -> void:
+	selection_changed.emit(ctx.selection.size())
+	if prop_panel_ref != null and is_instance_valid(prop_panel_ref):
+		prop_panel_ref.call("refresh")
+	queue_redraw()
+
+
+## 特性面板的引用（由主窗口注入），命令改了选择集后需要刷新它
+var prop_panel_ref: Object = null
+
+
 ## 把屏幕坐标解析为实际的输入点（经对象捕捉/正交/极轴/栅格处理）。
 ## 命令的橡皮筋基点作为追踪参考，使垂足、切点、极轴能正常工作。
 func snapped_model(screen_pos: Vector2) -> Vector2:
