@@ -73,6 +73,8 @@ func _build_toolbar() -> Control:
 	hb.add_theme_constant_override("separation", 6)
 	panel.add_child(hb)
 
+	hb.add_child(_file_menu())
+	hb.add_child(VSeparator.new())
 	hb.add_child(_btn("新建", func() -> void: new_document()))
 	hb.add_child(_btn("示例图", func() -> void: load_demo()))
 	hb.add_child(VSeparator.new())
@@ -146,6 +148,141 @@ func _snap_check(label: String, cb: Callable, on: bool) -> CheckBox:
 		cb.call(v)
 		viewport.queue_redraw())
 	return c
+
+
+## 文件菜单
+func _file_menu() -> MenuButton:
+	var mb := MenuButton.new()
+	mb.text = "文件"
+	mb.focus_mode = Control.FOCUS_NONE
+	var pop := mb.get_popup()
+	pop.add_item("打开工程 (Ctrl+O)", 0)
+	pop.add_item("保存 (Ctrl+S)", 1)
+	pop.add_item("另存为…", 2)
+	pop.add_separator()
+	pop.add_item("导出 DXF（R12，供 CAD 交换）", 3)
+	pop.add_item("导出 SVG 矢量图", 4)
+	pop.add_item("导出 PNG 光栅图", 5)
+	pop.add_item("插入国标图框", 6)
+	pop.id_pressed.connect(func(id: int) -> void: _on_file_menu(id))
+	return mb
+
+
+func _on_file_menu(id: int) -> void:
+	match id:
+		0:
+			_open_dialog(FileDialog.FILE_MODE_OPEN_FILE, ["*.hbd"], "打开工程", _do_open)
+		1:
+			if _current_path == "":
+				_open_dialog(FileDialog.FILE_MODE_SAVE_FILE, ["*.hbd"], "保存工程", _do_save)
+			else:
+				_save_to(_current_path)
+		2:
+			_open_dialog(FileDialog.FILE_MODE_SAVE_FILE, ["*.hbd"], "另存为", _do_save)
+		3:
+			_open_dialog(FileDialog.FILE_MODE_SAVE_FILE, ["*.dxf"], "导出 DXF", _do_export_dxf)
+		4:
+			_open_dialog(FileDialog.FILE_MODE_SAVE_FILE, ["*.svg"], "导出 SVG", _do_export_svg)
+		5:
+			_open_dialog(FileDialog.FILE_MODE_SAVE_FILE, ["*.png"], "导出 PNG", _do_export_png)
+		6:
+			viewport.run_command("SHEET")
+
+
+var _current_path: String = ""
+var _dialog: FileDialog = null
+var _dialog_cb: Callable = Callable()
+
+
+func _open_dialog(mode: int, filters: Array, title: String, cb: Callable) -> void:
+	if _dialog != null and is_instance_valid(_dialog):
+		_dialog.queue_free()
+	_dialog = FileDialog.new()
+	_dialog.file_mode = mode
+	_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_dialog.title = title
+	_dialog.use_native_dialog = true
+	var arr := PackedStringArray()
+	for f in filters:
+		arr.append(String(f))
+	_dialog.filters = arr
+	if mode == FileDialog.FILE_MODE_SAVE_FILE and filters.size() > 0:
+		_dialog.current_file = "图纸%s" % String(filters[0]).substr(1)
+	_dialog.size = Vector2i(760, 520)
+	add_child(_dialog)
+	_dialog.file_selected.connect(func(p: String) -> void:
+		if _dialog_cb.is_valid():
+			_dialog_cb.call(p))
+	_dialog_cb = cb
+	_dialog.popup_centered()
+
+
+func _do_open(path: String) -> void:
+	var err := NativeFormat.load_into(doc, path)
+	if err != OK:
+		prompt_label.text = "打开失败（错误码 %d）：%s" % [err, path]
+		return
+	_current_path = path
+	GbBlocks.install(doc)
+	viewport.setup(doc)
+	viewport.zoom_extents()
+	_refresh_status()
+	_show_status("已打开 %s（%d 个图元）" % [path.get_file(), doc.entity_count()])
+
+
+func _do_save(path: String) -> void:
+	_save_to(path)
+
+
+func _save_to(path: String) -> void:
+	var err := NativeFormat.save(doc, path)
+	if err != OK:
+		prompt_label.text = "保存失败（错误码 %d）：%s" % [err, path]
+		return
+	_current_path = path
+	_show_status("已保存 %s（%d 个图元）" % [path.get_file(), doc.entity_count()])
+
+
+func _do_export_dxf(path: String) -> void:
+	var w := DxfWriter.new(doc)
+	var err := w.save(path)
+	if err != OK:
+		prompt_label.text = "DXF 导出失败（错误码 %d）" % err
+		return
+	var f := FileAccess.open(path, FileAccess.READ)
+	var size := f.get_length() if f != null else 0
+	if f != null:
+		f.close()
+	_show_status("已导出 DXF R12：%s（%.1f KB）%s" % [
+		path.get_file(), size / 1024.0,
+		"" if Gbk.is_available() else "  ⚠ GBK 表缺失，中文已写成 ?"])
+
+
+func _do_export_svg(path: String) -> void:
+	var w := SvgWriter.new(doc.plot_scale)
+	var text := w.write(doc)
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		prompt_label.text = "导出失败：无法写入 %s" % path
+		return
+	f.store_string(text)
+	f.close()
+	_show_status("已导出 SVG：%s" % path.get_file())
+
+
+func _do_export_png(path: String) -> void:
+	# 用视口的当前渲染结果出图（所见即所得），尺寸随窗口
+	var img := viewport.get_viewport().get_texture().get_image()
+	var err := img.save_png(path)
+	if err != OK:
+		prompt_label.text = "导出失败（错误码 %d）" % err
+		return
+	_show_status("已导出 PNG：%s（%d×%d）" % [path.get_file(), img.get_width(), img.get_height()])
+
+
+func _show_status(msg: String) -> void:
+	if prompt_label != null:
+		prompt_label.text = msg
 
 
 ## 由命令注册表生成分类下拉菜单
@@ -362,6 +499,9 @@ func _shortcut_input(event: InputEvent) -> void:
 				accept_event()
 			KEY_N:
 				new_document()
+				accept_event()
+			KEY_O:
+				_on_file_menu(0)
 				accept_event()
 		return
 	# 无修饰键：把焦点交给命令行，让用户直接敲命令
