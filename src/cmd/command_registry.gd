@@ -39,7 +39,16 @@ const DEFS := [
 	["EXPLODE", ["X", "分解"], "几何编辑", "分解：把多段线/块打散为基本图元"],
 	["JOIN", ["J", "合并"], "几何编辑", "合并：把首尾相接的多段线合并为一条"],
 
-	# --- 视图 ---
+# --- 标注 ---
+["DIMLINEAR", ["DLI", "DL", "线性标注"], "标注", "线性标注：两点 + 尺寸线位置，自动判水平/竖直"],
+["DIMALIGNED", ["DAL", "对齐标注"], "标注", "对齐标注：尺寸线平行于两点连线"],
+["DIMRADIUS", ["DRA", "半径标注"], "标注", "半径标注：点取圆或圆弧 + 文字位置"],
+["DIMDIAMETER", ["DDI", "直径标注"], "标注", "直径标注：点取圆或圆弧 + 文字位置"],
+["DIMANGULAR", ["DAN", "角度标注"], "标注", "角度标注：顶点 + 两边上的点 + 圆弧位置"],
+["DIMCONTINUE", ["DCO", "连续标注"], "标注", "连续标注：尺寸线首尾相接"],
+["DIMBASELINE", ["DBA", "基线标注"], "标注", "基线标注：共用基准，逐层偏移"],
+
+# --- 视图 ---
 	["ZOOM", ["Z"], "视图", "缩放到图纸范围"],
 	["UNDO", ["U", "撤销"], "视图", "撤销上一步"],
 	["REDO", [], "视图", "重做"],
@@ -174,6 +183,20 @@ static func create(name: String) -> CadCommand:
 			return CmdGeom.Explode.new()
 		"JOIN":
 			return CmdGeom.Join.new()
+		"DIMLINEAR":
+			return CmdDim.DimLinear.new()
+		"DIMALIGNED":
+			return CmdDim.DimAligned.new()
+		"DIMRADIUS":
+			return CmdDim.DimRadial.new(false)
+		"DIMDIAMETER":
+			return CmdDim.DimRadial.new(true)
+		"DIMANGULAR":
+			return CmdDim.DimAngular.new()
+		"DIMCONTINUE":
+			return CmdDim.DimChain.new(false)
+		"DIMBASELINE":
+			return CmdDim.DimChain.new(true)
 	return null
 
 

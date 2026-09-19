@@ -73,22 +73,23 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 		if not vr.intersects(e.get_bbox()):
 			culled += 1
 			continue
-		if e.type == CadEntity.Type.TEXT:
-			_collect_text(doc, view, e as EntText)
-			drawn += 1
-			continue
+		# 文字注记与几何是两条独立通道：尺寸标注同时有尺寸线（几何）
+		# 和尺寸数字（文字），所以这里不能写成二选一。
+		for a in e.get_annotation_texts():
+			_collect_text(doc, view, e, a)
+
 		if e.type == CadEntity.Type.POINT:
 			_collect_point(doc, view, e as EntPoint)
 			drawn += 1
 			continue
+
 		var color := doc.resolve_color(e)
-		if color.a <= 0.001:
-			continue
-		var width := _resolve_width(doc, e)
-		var bucket := _bucket(color, width)
-		var lt := doc.get_linetype(doc.resolve_linetype(e))
-		for c in e.get_curves():
-			_emit_curve(doc, bucket, c, lt, e.linetype_scale, xf, sag, view.zoom)
+		if color.a > 0.001:
+			var width := _resolve_width(doc, e)
+			var bucket := _bucket(color, width)
+			var lt := doc.get_linetype(doc.resolve_linetype(e))
+			for c in e.get_curves():
+				_emit_curve(doc, bucket, c, lt, e.linetype_scale, xf, sag, view.zoom)
 		drawn += 1
 
 	_flush(ci)
@@ -327,13 +328,19 @@ func _draw_points(_doc: CadDocument, view: ViewTransform, ci: CanvasItem) -> voi
 		ci.draw_arc(sp, r * 0.75, 0.0, TAU, 16, col, 1.0, true)
 
 
-func _collect_text(doc: CadDocument, view: ViewTransform, t: EntText) -> void:
-	var size_px := int(roundf(t.height * view.zoom))
+## 收集一条文字注记。owner 用于取图层颜色；ann 是注记内容字典。
+func _collect_text(doc: CadDocument, view: ViewTransform, owner: CadEntity, ann: Dictionary) -> void:
+	var h := float(ann.get("height", 0.0))
+	if h <= 0.0:
+		# 字高为 0 表示跟随文字样式
+		var st := doc.get_text_style(String(ann.get("style", "")))
+		h = st.height if (st != null and st.height > 0.0) else 3.5
+	var size_px := int(roundf(h * view.zoom))
 	if size_px < min_text_px:
 		return
 	if size_px > max_text_px:
 		size_px = max_text_px
-	_text_items.append({"e": t, "px": size_px, "style": doc.get_text_style(t.text_style)})
+	_text_items.append({"owner": owner, "ann": ann, "px": size_px})
 
 
 ## 文字在**屏幕空间**逐条提交（每条一次 draw_string）。
@@ -346,24 +353,32 @@ func _draw_texts(doc: CadDocument, _view: ViewTransform, ci: CanvasItem) -> int:
 	var vr := _view.visible_rect()
 	var drawn := 0
 	for item in _text_items:
-		var t: EntText = item["e"]
-		if not vr.has_point(t.position):
+		var owner: CadEntity = item["owner"]
+		var ann: Dictionary = item["ann"]
+		var text := String(ann.get("text", ""))
+		if text == "":
 			continue
-		var style: CadTextStyle = item["style"]
+		var pos_model: Vector2 = ann.get("position", Vector2.ZERO)
+		if not vr.has_point(pos_model):
+			continue
+		var style := doc.get_text_style(String(ann.get("style", "")))
 		if style == null:
 			continue
 		var f := fm.font_for(style)
 		var px: int = item["px"]
-		var pos := _view.to_screen(t.position)
-		var size := f.get_string_size(t.text, HORIZONTAL_ALIGNMENT_LEFT, -1, px)
-		if not t.measured_valid:
-			# 记录模型空间尺寸，供拾取与包围盒使用
+		var pos := _view.to_screen(pos_model)
+		var size := f.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, px)
+		# 文字图元要把实测尺寸回写，供拾取与包围盒使用
+		if owner is EntText and not (owner as EntText).measured_valid:
 			var inv := 1.0 / maxf(_view.zoom, 1.0e-9)
-			t.set_measured_size(Vector2(size.x * inv, size.y * inv))
+			(owner as EntText).set_measured_size(Vector2(size.x * inv, size.y * inv))
 
+		var h_align := int(ann.get("h_align", EntText.HAlign.LEFT))
+		var v_align := int(ann.get("v_align", EntText.VAlign.BASELINE))
+		var rot := float(ann.get("rotation", 0.0))
 		# 水平对正
 		var dx := 0.0
-		match t.h_align:
+		match h_align:
 			EntText.HAlign.CENTER, EntText.HAlign.MIDDLE:
 				dx = -size.x * 0.5
 			EntText.HAlign.RIGHT:
@@ -373,17 +388,17 @@ func _draw_texts(doc: CadDocument, _view: ViewTransform, ci: CanvasItem) -> int:
 		var ascent := f.get_ascent(px)
 		var descent := f.get_descent(px)
 		var dy := 0.0
-		match t.v_align:
+		match v_align:
 			EntText.VAlign.TOP:
 				dy = ascent
 			EntText.VAlign.MIDDLE:
 				dy = (ascent - descent) * 0.5
 			EntText.VAlign.BOTTOM:
 				dy = -descent
-		var color := doc.resolve_color(t)
+		var color := doc.resolve_color(owner)
 		# 屏幕 Y 向下，模型旋转角 theta 对应的局部系旋转为 -theta
-		ci.draw_set_transform(pos, -t.rotation, Vector2.ONE)
-		ci.draw_string(f, Vector2(dx, dy), t.text, HORIZONTAL_ALIGNMENT_LEFT, -1, px, color)
+		ci.draw_set_transform(pos, -rot, Vector2.ONE)
+		ci.draw_string(f, Vector2(dx, dy), text, HORIZONTAL_ALIGNMENT_LEFT, -1, px, color)
 		ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 		drawn += 1
 	return drawn

@@ -50,6 +50,19 @@ func get_curves() -> Array[GeoCurve]:
 	return []
 
 
+## 把自身作为一条文字注记交给统一渲染路径
+func get_annotation_texts() -> Array:
+	return [{
+		"text": text,
+		"position": position,
+		"rotation": rotation,
+		"height": height,
+		"style": text_style,
+		"h_align": h_align,
+		"v_align": v_align,
+	}]
+
+
 ## 未实测时按字高与字符数估算包围盒，保证拾取在首次渲染前也可用。
 ## 汉字按 1 个字宽计，拉丁字母按 0.5 个字宽计。
 func estimate_size() -> Vector2:

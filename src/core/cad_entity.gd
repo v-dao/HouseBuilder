@@ -58,6 +58,25 @@ var owner_block: String = ""
 var _bbox_cache: Rect2 = Rect2()
 var _bbox_valid: bool = false
 
+## 所属文档的弱引用。
+## 必须用 WeakRef：文档强引用图元、图元若再强引用文档会形成引用环，
+## GDScript 的引用计数无法回收，整张图纸会泄漏。
+var _doc_ref: WeakRef = null
+
+
+## 所属文档，未加入文档时返回 null
+func get_document() -> CadDocument:
+	return _doc_ref.get_ref() if _doc_ref != null else null
+
+
+func _attach_document(doc: CadDocument) -> void:
+	_doc_ref = weakref(doc)
+	invalidate_bbox()
+
+
+func _detach_document() -> void:
+	_doc_ref = null
+
 
 # ---------------------------------------------------------------------------
 # 子类必须实现
@@ -157,6 +176,14 @@ func distance_to(p: Vector2) -> float:
 	for c in get_curves():
 		best = minf(best, c.distance_to(p))
 	return best
+
+
+## 需要渲染的文字注记。返回字典数组，每项：
+##   { text, position, rotation, height, style, h_align, v_align }
+## 默认无。文字图元与尺寸标注通过它把文字交给统一的文字渲染路径，
+## 避免渲染器为每种带文字的图元各开一个分支。
+func get_annotation_texts() -> Array:
+	return []
 
 
 ## 曲线的特征点汇总（供对象捕捉使用）

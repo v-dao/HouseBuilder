@@ -83,6 +83,7 @@ func add_entity(e: CadEntity, record := true) -> void:
 		_next_handle = e.handle + 1
 	entities.append(e)
 	_by_handle[e.handle] = e
+	e._attach_document(self)
 	if record and undo.is_recording():
 		undo.record_add(e)
 	_bump()
@@ -102,6 +103,7 @@ func remove_entity(e: CadEntity, record := true) -> bool:
 		undo.record_remove(e)
 	entities.remove_at(idx)
 	_by_handle.erase(e.handle)
+	e._detach_document()
 	_bump()
 	entity_removed.emit(e)
 	return true

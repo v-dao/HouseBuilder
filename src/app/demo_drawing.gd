@@ -107,10 +107,16 @@ static func build(doc: CadDocument) -> void:
 	#     不压住房间名（GB/T 50001 附录的建筑材料图例画法基础）---
 	_add_hatch_legend(doc, hatch, txt)
 
-	# --- 尺寸标注：三道尺寸线（门窗定位 / 轴线 / 总尺寸）---
-	_add_dim_chain(doc, dim, txt, xs, -900.0)
-	_add_dim_chain(doc, dim, txt, [0.0, 7800.0], -1500.0)
-	_add_dim_chain(doc, dim, txt, [-120.0, 7920.0], -2100.0)
+	# --- 尺寸标注：按 GB/T 50001 用真实标注图元生成三道尺寸线
+	#     （第一道总尺寸 / 第二道轴线尺寸 / 第三道门窗定位尺寸）---
+	_add_linear_chain(doc, xs, -900.0)
+	_add_linear_chain(doc, [0.0, 7800.0], -1500.0)
+	_add_linear_chain(doc, [-120.0, 7920.0], -2100.0)
+	# 半径标注：给楼梯间的门开启弧加一个半径尺寸，验证引线画法
+	var rdim := EntDim.make_radius(Vector2(3600.0, 1800.0), Vector2(4400.0, 1800.0), Vector2(4900.0, 2100.0))
+	rdim.dim_style_name = doc.current_dim_style
+	_put(rdim, dim)
+	doc.add_entity(rdim, false)
 
 	# --- 房间名与面积 ---
 	_add_room(doc, txt, Vector2(1740.0, 1440.0), "客厅", "22.2 m²")
@@ -263,33 +269,22 @@ static func _clip_seg_rect(a: Vector2, b: Vector2, r: Rect2) -> PackedVector2Arr
 	return PackedVector2Array([a + Vector2(dx, dy) * t0, a + Vector2(dx, dy) * t1])
 
 
-## 尺寸链：尺寸界线 + 尺寸线 + 45° 斜短线起止符号 + 尺寸数字
-## 完全按 GB/T 50001 第 11 章：界线超出尺寸线 2.5、起止符号 45° 长 2.5、数字在尺寸线上方居中
-static func _add_dim_chain(doc: CadDocument, dim_layer: String, txt_layer: String,
-		stops: Array, y: float) -> void:
+## 尺寸链：按 GB/T 50001 用线性标注图元逐段生成。
+## 尺寸界线、45° 斜短线起止符号、尺寸数字的排版全部由 EntDim 依标注样式推导，
+## 这里只提供被标注的点与尺寸线位置。
+static func _add_linear_chain(doc: CadDocument, stops: Array, y: float) -> void:
 	if stops.size() < 2:
 		return
-	# 尺寸线
-	var dl := EntLine.make(Vector2(stops[0], y), Vector2(stops[stops.size() - 1], y))
-	_put(dl, dim_layer)
-	doc.add_entity(dl, false)
-	for i in range(stops.size()):
-		# 尺寸界线（自图形轮廓线引出，超出尺寸线 2.5×比例）
-		var ext := EntLine.make(Vector2(stops[i], y - 180.0), Vector2(stops[i], y + 420.0))
-		_put(ext, dim_layer)
-		doc.add_entity(ext, false)
-		# 起止符号：45° 中粗斜短线
-		var tick := EntLine.make(Vector2(stops[i] - 180.0, y - 180.0), Vector2(stops[i] + 180.0, y + 180.0))
-		_put(tick, dim_layer)
-		doc.add_entity(tick, false)
-		if i < stops.size() - 1:
-			var mid := (float(stops[i]) + float(stops[i + 1])) * 0.5
-			var label := "%.0f" % absf(float(stops[i + 1]) - float(stops[i]))
-			var t := EntText.make(Vector2(mid, y + 60.0), label, 240.0)
-			t.text_style = "标注_2.5"
-			t.h_align = EntText.HAlign.CENTER
-			_put(t, txt_layer)
-			doc.add_entity(t, false)
+	for i in range(stops.size() - 1):
+		var a := Vector2(float(stops[i]), 0.0)
+		var b := Vector2(float(stops[i + 1]), 0.0)
+		# 尺寸线放在两点中点下方，EntDim 会据此判定为水平标注
+		var mid := (a + b) * 0.5
+		var d := EntDim.make_linear(a, b, Vector2(mid.x, y))
+		d.dim_style_name = doc.current_dim_style
+		d.text_style_name = "标注_2.5"
+		_put(d, "尺寸标注")
+		doc.add_entity(d, false)
 
 
 ## 图例框：在图纸左下角画一个小方框并填充 45° 素线，
