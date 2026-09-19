@@ -100,7 +100,7 @@ func _make_key() -> String:
 
 ## 填充本身以线段参与渲染与几何运算。
 ## 包成多段线是为了复用统一的偏移/修剪/捕捉能力。
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	if solid:
 		return [GeoPoly.make(boundary, PackedFloat64Array(), true)]
 	return [GeoPoly.make(pattern_segments(), PackedFloat64Array(), false)]

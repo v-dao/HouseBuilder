@@ -57,7 +57,7 @@ func block_entities() -> Array[CadEntity]:
 
 
 ## 返回变换后的块内图元曲线。供捕捉、拾取、几何运算使用。
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	var out: Array[GeoCurve] = []
 	var xf := insert_transform()
 	for e in block_entities():

@@ -24,7 +24,7 @@ func type_name() -> String:
 	return "样条曲线"
 
 
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	return [spline]
 
 

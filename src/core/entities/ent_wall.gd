@@ -111,7 +111,7 @@ func direction_at_dist(d: float) -> Vector2:
 
 ## 生成墙体轮廓。做法：把中心线按洞口切成若干段，
 ## 每段向两侧偏移 t/2 得到一个小矩形，洞口处自然形成垛口（门窗洞口的侧壁）。
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	var out: Array[GeoCurve] = []
 	var spans := solid_spans()
 	var half := thickness * 0.5

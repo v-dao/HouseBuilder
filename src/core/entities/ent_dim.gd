@@ -181,7 +181,7 @@ func _angular_sweep() -> float:
 # 几何生成
 # ---------------------------------------------------------------------------
 
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	match dim_type:
 		DimType.LINEAR, DimType.ALIGNED:
 			return _linear_curves()

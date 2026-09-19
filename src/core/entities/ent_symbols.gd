@@ -57,7 +57,7 @@ class Elevation extends Base:
 		return "标高符号"
 
 	## GB：直角等腰三角形，高约 3mm，用细实线绘制
-	func get_curves() -> Array[GeoCurve]:
+	func _build_curves() -> Array[GeoCurve]:
 		var h := mm(3.0)
 		var sgn := -1.0 if flip else 1.0
 		var apex := position
@@ -161,7 +161,7 @@ class IndexMark extends Base:
 		# 索引符号直径 10mm、详图符号直径 14mm
 		return mm(7.0 if is_detail else 5.0)
 
-	func get_curves() -> Array[GeoCurve]:
+	func _build_curves() -> Array[GeoCurve]:
 		var out: Array[GeoCurve] = []
 		var r := radius()
 		out.append(GeoArc.make_circle(position, r))
@@ -267,7 +267,7 @@ class SectionMark extends Base:
 		return "剖切符号"
 
 	## 剖切位置线长 6~10mm，投射方向线长 4~6mm（GB/T 50001 第 9 章）
-	func get_curves() -> Array[GeoCurve]:
+	func _build_curves() -> Array[GeoCurve]:
 		var out: Array[GeoCurve] = []
 		var d := p2 - p1
 		if d.length() <= Tol.MIN_LEN:
@@ -355,7 +355,7 @@ class Leader extends Base:
 	func kind_name() -> String:
 		return "引出线"
 
-	func get_curves() -> Array[GeoCurve]:
+	func _build_curves() -> Array[GeoCurve]:
 		var out: Array[GeoCurve] = []
 		for i in range(points.size() - 1):
 			out.append(GeoSeg.make(points[i], points[i + 1]))
@@ -446,7 +446,7 @@ class BreakLine extends Base:
 	func kind_name() -> String:
 		return "波浪线" if style == Style.WAVY else "折断线"
 
-	func get_curves() -> Array[GeoCurve]:
+	func _build_curves() -> Array[GeoCurve]:
 		var d := p2 - p1
 		var total := d.length()
 		if total <= Tol.MIN_LEN:
@@ -534,7 +534,7 @@ class AxisBubble extends Base:
 		# GB：细实线圆，直径 8~10mm，此处取 10mm
 		return mm(5.0)
 
-	func get_curves() -> Array[GeoCurve]:
+	func _build_curves() -> Array[GeoCurve]:
 		return [GeoArc.make_circle(position, radius())]
 
 	func get_annotation_texts() -> Array:

@@ -18,8 +18,14 @@ func type_name() -> String:
 	return "直线"
 
 
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	return [GeoSeg.make(p0, p1)]
+
+
+## 直线是最常见的图元，覆写以消除每帧的临时数组分配
+func emit_screen_segments(xf: Transform2D, out: PackedVector2Array, _sagitta: float) -> void:
+	out.append(xf * p0)
+	out.append(xf * p1)
 
 
 func get_grips() -> PackedVector2Array:

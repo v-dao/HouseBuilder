@@ -20,7 +20,7 @@ func type_name() -> String:
 
 
 ## 点没有线状几何。返回一条退化线段，让捕捉与拾取的距离计算能自然落到该点上。
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	return [GeoSeg.make(position, position)]
 
 

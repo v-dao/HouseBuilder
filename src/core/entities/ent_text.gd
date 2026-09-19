@@ -46,7 +46,7 @@ func type_name() -> String:
 
 ## 文字没有解析曲线；渲染与拾取走专门的文字路径。
 ## 但基线作为一条退化曲线返回，便于捕捉插入点。
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	return []
 
 

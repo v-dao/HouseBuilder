@@ -19,7 +19,7 @@ func type_name() -> String:
 	return "圆"
 
 
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	return [GeoArc.make_circle(center, radius)]
 
 

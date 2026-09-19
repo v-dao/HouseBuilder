@@ -59,6 +59,9 @@ var owner_block: String = ""
 # --- 缓存 ---
 var _bbox_cache: Rect2 = Rect2()
 var _bbox_valid: bool = false
+## 解析曲线缓存。与包围盒缓存同生共死 —— 几何一变两者都要失效。
+var _curves_cache: Array[GeoCurve] = []
+var _curves_valid: bool = false
 
 ## 所属文档的弱引用。
 ## 必须用 WeakRef：文档强引用图元、图元若再强引用文档会形成引用环，
@@ -94,8 +97,34 @@ func plot_scale() -> float:
 # ---------------------------------------------------------------------------
 
 ## 返回图元的解析曲线（世界坐标）。这是几何内核的统一入口。
+##
+## 带缓存：几何解析（尤其块引用、墙体轮廓、填充图案）可能相当昂贵，
+## 而渲染每帧都要调用它。缓存随 invalidate_bbox() 一起失效 ——
+## 只要图元几何变了就必须调它，这是本项目的约定。
 func get_curves() -> Array[GeoCurve]:
+	if not _curves_valid:
+		_curves_cache = _build_curves()
+		_curves_valid = true
+	return _curves_cache
+
+
+## 子类实现：构造本图元的解析曲线
+func _build_curves() -> Array[GeoCurve]:
 	return []
+
+
+## 直接把**屏幕空间**的线段追加到 out。
+##
+## 为什么要有这条路径：默认实现要走 tessellate() 生成模型空间点串、
+## 再用 Transform2D 乘出新的数组，每帧为每个图元分配两三个数组。
+## 十万图元下这些分配就是主要开销（实测每帧上百毫秒）。
+## 直线等简单图元覆写本方法即可做到零分配。
+func emit_screen_segments(xf: Transform2D, out: PackedVector2Array, sagitta: float) -> void:
+	for c in get_curves():
+		var pts := c.tessellate(sagitta)
+		for i in range(pts.size() - 1):
+			out.append(xf * pts[i])
+			out.append(xf * pts[i + 1])
 
 
 ## 夹点位置（世界坐标）
@@ -161,8 +190,10 @@ func get_bbox() -> Rect2:
 	return _bbox_cache
 
 
+## 几何变更后必须调用。同时让包围盒与解析曲线缓存失效。
 func invalidate_bbox() -> void:
 	_bbox_valid = false
+	_curves_valid = false
 
 
 ## 把公共字段复制到另一个图元。clone() 的标准做法是

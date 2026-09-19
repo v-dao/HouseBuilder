@@ -147,7 +147,7 @@ func _attach_offset(size: Vector2) -> Vector2:
 	return Vector2(dx, dy)
 
 
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	return []
 
 

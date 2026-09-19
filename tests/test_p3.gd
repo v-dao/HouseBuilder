@@ -21,6 +21,9 @@ func run() -> void:
 	_test_sheets()
 	_test_title_block()
 
+	suite = "设置持久化"
+	_test_settings()
+
 	suite = "图纸空间布局"
 	_test_layout_basics()
 	_test_layout_fit()
@@ -375,3 +378,74 @@ func _test_layout_roundtrip() -> void:
 	# 没有布局的旧文件应能正常载入
 	var doc3 := CadDocument.new()
 	ok(NativeFormat.load_into(doc3, path) == OK, "重复载入应成功")
+
+
+# ---------------------------------------------------------------------------
+# 设置持久化
+# ---------------------------------------------------------------------------
+
+## 用户偏好必须能落盘并读回；配置文件缺失或损坏时不能影响启动
+func _test_settings() -> void:
+	var st := AppSettings.new()
+	# 改一批非默认值
+	st.show_grid = false
+	st.show_lineweight = true
+	st.ortho = true
+	st.grid_step = 250.0
+	st.polar_step_deg = 30.0
+	st.aperture_px = 16.0
+	st.plot_scale = 50.0
+	st.ltscale = 35.0
+	st.paper_format = "A2"
+	st.paper_portrait = true
+	st.bg_color = Color(0.1, 0.12, 0.15)
+	st.push_recent("res://tests/out/一层平面图.hbd")
+	st.push_recent("res://tests/out/总平面图.hbd")
+	ok(st.save_to_disk(), "设置应能写入磁盘")
+
+	var st2 := AppSettings.new()
+	ok(st2.load_from_disk(), "设置应能读回")
+	ok(not st2.show_grid, "布尔值往返")
+	ok(st2.show_lineweight, "布尔值往返 2")
+	ok(st2.ortho, "正交开关往返")
+	close(st2.grid_step, 250.0, "栅格间距往返")
+	close(st2.polar_step_deg, 30.0, "极轴步长往返")
+	close(st2.aperture_px, 16.0, "靶框大小往返")
+	close(st2.plot_scale, 50.0, "出图比例往返")
+	close(st2.ltscale, 35.0, "线型比例往返")
+	ok(st2.paper_format == "A2", "幅面往返")
+	ok(st2.paper_portrait, "横竖式往返")
+	ok(absf(st2.bg_color.r - 0.1) <= 1.0 / 255.0, "背景色往返")
+	ok(st2.recent_files.size() == 2, "最近文件数量往返")
+	ok(String(st2.recent_files[0]).contains("总平面图"), "最近使用应排在最前")
+
+	# 重复加入同一路径应提到最前而不是重复累积
+	st2.push_recent("res://tests/out/一层平面图.hbd")
+	ok(st2.recent_files.size() == 2, "重复路径不应累积，实际 %d" % st2.recent_files.size())
+	ok(String(st2.recent_files[0]).contains("一层平面图"), "重复路径应提到最前")
+
+	# 超出上限应裁剪
+	for i in range(15):
+		st2.push_recent("res://tests/out/文件%d.hbd" % i)
+	ok(st2.recent_files.size() <= 10, "最近文件应限制在 10 条内，实际 %d" % st2.recent_files.size())
+
+	# 缺键的旧配置应能载入并保留默认值
+	var cf := ConfigFile.new()
+	cf.set_value("view", "show_grid", false)
+	cf.save(AppSettings.PATH)
+	var st3 := AppSettings.new()
+	ok(st3.load_from_disk(), "缺键的配置应能载入")
+	ok(not st3.show_grid, "存在的键应生效")
+	close(st3.grid_step, 100.0, "缺键应保留默认值")
+
+	# 越界值应被夹取而不是照单全收
+	var cf2 := ConfigFile.new()
+	cf2.set_value("snap", "grid_step", -9999.0)
+	cf2.set_value("snap", "polar_step_deg", 100000.0)
+	cf2.set_value("plot", "plot_scale", 0.0)
+	cf2.save(AppSettings.PATH)
+	var st4 := AppSettings.new()
+	st4.load_from_disk()
+	ok(st4.grid_step > 0.0, "越界的栅格间距应被夹取，实际 %s" % str(st4.grid_step))
+	ok(st4.polar_step_deg <= 90.0, "越界的极轴步长应被夹取，实际 %s" % str(st4.polar_step_deg))
+	ok(st4.plot_scale >= 1.0, "越界的出图比例应被夹取，实际 %s" % str(st4.plot_scale))

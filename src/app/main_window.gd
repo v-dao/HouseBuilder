@@ -5,6 +5,8 @@ extends Control
 ## 状态联动）本身就是代码，写在同一个文件里比散落在场景文件里更好维护。
 
 var doc: CadDocument = null
+## 用户偏好。启动时读取，退出与改动时写回。
+var settings := AppSettings.new()
 var viewport: CadViewport = null
 var cmd_edit: LineEdit = null
 var prompt_label: Label = null
@@ -23,7 +25,11 @@ var polar_check: CheckBox = null
 
 
 func _ready() -> void:
+	settings.load_from_disk()
 	_build_ui()
+	_apply_settings()
+	# 关窗时落盘，避免用户调好的偏好每次都要重设
+	get_tree().auto_accept_quit = false
 	new_document()
 	# 首次打开直接给一张示例图，让用户立刻看到软件能画出什么。
 	# "新建" 会回到空白图纸。
@@ -35,6 +41,70 @@ func _ready() -> void:
 # ---------------------------------------------------------------------------
 # 界面构建
 # ---------------------------------------------------------------------------
+
+## 把设置应用到界面
+func _apply_settings() -> void:
+	if viewport == null:
+		return
+	grid_check.set_pressed_no_signal(settings.show_grid)
+	cross_check.set_pressed_no_signal(settings.show_crosshair)
+	lw_check.set_pressed_no_signal(settings.show_lineweight)
+	osnap_check.set_pressed_no_signal(settings.osnap_enabled)
+	ortho_check.set_pressed_no_signal(settings.ortho)
+	grid_snap_check.set_pressed_no_signal(settings.grid_snap)
+	polar_check.set_pressed_no_signal(settings.polar_enabled)
+	viewport.show_grid = settings.show_grid
+	viewport.show_crosshair = settings.show_crosshair
+	viewport.show_axes = settings.show_axes
+	viewport.bg_color = settings.bg_color
+	viewport.renderer.show_lineweight = settings.show_lineweight
+	viewport.snap.osnap_enabled = settings.osnap_enabled
+	viewport.snap.ortho = settings.ortho
+	viewport.snap.grid_snap = settings.grid_snap
+	viewport.snap.grid_step = settings.grid_step
+	viewport.snap.polar_enabled = settings.polar_enabled
+	viewport.snap.polar_step_deg = settings.polar_step_deg
+	viewport.snap.aperture_px = settings.aperture_px
+	viewport.queue_redraw()
+
+
+## 从界面与文档收集当前偏好
+func _collect_settings() -> void:
+	if viewport == null:
+		return
+	settings.show_grid = viewport.show_grid
+	settings.show_crosshair = viewport.show_crosshair
+	settings.show_axes = viewport.show_axes
+	settings.show_lineweight = viewport.renderer.show_lineweight
+	settings.osnap_enabled = viewport.snap.osnap_enabled
+	settings.osnap_mask = viewport.snap.osnap_mask
+	settings.ortho = viewport.snap.ortho
+	settings.grid_snap = viewport.snap.grid_snap
+	settings.grid_step = viewport.snap.grid_step
+	settings.polar_enabled = viewport.snap.polar_enabled
+	settings.polar_step_deg = viewport.snap.polar_step_deg
+	settings.aperture_px = viewport.snap.aperture_px
+	if doc != null:
+		settings.plot_scale = doc.plot_scale
+		settings.ltscale = doc.ltscale
+	var l := doc.current_layout() if doc != null else null
+	if l != null:
+		settings.paper_format = l.format
+		settings.paper_portrait = l.portrait
+	var sz := DisplayServer.window_get_size()
+	if sz.x > 200 and sz.y > 200:
+		settings.window_size = sz
+	settings.window_maximized = DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_MAXIMIZED
+
+
+func _notification(what: int) -> void:
+	# 关闭窗口前落盘。用 auto_accept_quit = false 接管退出流程，
+	# 这样即使用户直接点标题栏的叉也能保存偏好。
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_collect_settings()
+		settings.save_to_disk()
+		get_tree().quit()
+
 
 func _build_ui() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -56,6 +126,7 @@ func _build_ui() -> void:
 	viewport.command_finished.connect(func() -> void: _refresh_status())
 	# F3/F8/F9/F10 在视口里切换状态，界面上的勾选要跟着同步
 	viewport.snap_changed.connect(func() -> void:
+		_collect_settings()
 		if osnap_check != null:
 			osnap_check.set_pressed_no_signal(viewport.snap.osnap_enabled)
 			ortho_check.set_pressed_no_signal(viewport.snap.ortho)
@@ -231,6 +302,9 @@ func _do_open(path: String) -> void:
 		prompt_label.text = "打开失败（错误码 %d）：%s" % [err, path]
 		return
 	_current_path = path
+	settings.push_recent(path)
+	_collect_settings()
+	settings.save_to_disk()
 	GbBlocks.install(doc)
 	viewport.setup(doc)
 	viewport.zoom_extents()
@@ -248,6 +322,7 @@ func _save_to(path: String) -> void:
 		prompt_label.text = "保存失败（错误码 %d）：%s" % [err, path]
 		return
 	_current_path = path
+	settings.push_recent(path)
 	_show_status("已保存 %s（%d 个图元）" % [path.get_file(), doc.entity_count()])
 
 

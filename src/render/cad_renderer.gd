@@ -40,6 +40,11 @@ var stats: Dictionary = {}
 var _bucket_pts: Dictionary = {}
 # 分桶元数据：key -> [Color, width_px]
 var _bucket_meta: Dictionary = {}
+## 每帧构建一次的图层解析缓存：
+## 图层名 -> {visible, color, width, linetype, bucket}
+## 没有它的话，每个图元都要做四五次字典查找（可见性/颜色/线宽/线型），
+## 十万图元下这些查找本身就是主要开销之一。
+var _layer_cache: Dictionary = {}
 var _text_items: Array = []
 var _point_items: Array = []
 var _solid_items: Array = []
@@ -62,6 +67,7 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 		selection: Array[CadEntity] = []) -> void:
 	_bucket_pts.clear()
 	_bucket_meta.clear()
+	_layer_cache.clear()
 	_text_items.clear()
 	_point_items.clear()
 	_solid_items.clear()
@@ -76,7 +82,10 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 	var sag := view.sagitta_for_pixels(sagitta_px)
 
 	for e in doc.entities:
-		if not e.visible or not doc.is_layer_visible(e.layer):
+		if not e.visible:
+			continue
+		var lc: Dictionary = _layer_info(doc, e.layer)
+		if not bool(lc["visible"]):
 			continue
 		if not vr.intersects(e.get_bbox()):
 			culled += 1
@@ -110,13 +119,24 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 			drawn += 1
 			continue
 
-		var color := doc.resolve_color(e)
+		# 图元自身指定了颜色或线型时才走逐图元解析，
+		# 否则直接用图层缓存的结果 —— 绝大多数图元都是随层的
+		var color: Color = lc["color"]
+		var lt: CadLinetype = lc["linetype"]
+		var bucket: PackedVector2Array = lc["bucket"]
+		if e.aci >= 1 and e.aci <= 255:
+			color = e.color
+			bucket = _bucket(color, _resolve_width(doc, e))
 		if color.a > 0.001:
-			var width := _resolve_width(doc, e)
-			var bucket := _bucket(color, width)
-			var lt := doc.get_linetype(doc.resolve_linetype(e))
-			for c in e.get_curves():
-				_emit_curve(doc, bucket, c, lt, e.linetype_scale, xf, sag, view.zoom)
+			if e.linetype != "BYLAYER" and e.linetype != "":
+				lt = doc.get_linetype(doc.resolve_linetype(e))
+			if lt == null or lt.is_continuous():
+				var before := bucket.size()
+				e.emit_screen_segments(xf, bucket, sag)
+				_seg_count += (bucket.size() - before) / 2
+			else:
+				for c in e.get_curves():
+					_emit_curve(doc, bucket, c, lt, e.linetype_scale, xf, sag, view.zoom)
 		drawn += 1
 
 	# 墙体并集轮廓：必须在普通图元之前入桶，使墙线压在被填充的构件之下。
@@ -141,6 +161,29 @@ func draw(doc: CadDocument, view: ViewTransform, ci: CanvasItem,
 		"solids": _solid_items.size(),
 		"overflow": _overflow,
 	}
+
+
+## 取图层的解析结果，首次访问时构建并缓存
+func _layer_info(doc: CadDocument, layer: String) -> Dictionary:
+	if _layer_cache.has(layer):
+		return _layer_cache[layer]
+	var l := doc.get_layer(layer)
+	var visible := l == null or l.is_displayable()
+	var color := l.color if l != null else Color.WHITE
+	var lt_name := l.linetype if l != null else "CONTINUOUS"
+	var lw := l.lineweight if l != null else CadLayer.LW_DEFAULT
+	var lt := doc.get_linetype(lt_name)
+	var width := min_width_px
+	if show_lineweight:
+		width = clampf((lw if lw >= 0.0 else 0.25) * px_per_mm, min_width_px, max_width_px)
+	var info := {
+		"visible": visible,
+		"color": color,
+		"linetype": lt,
+		"bucket": _bucket(color, width),
+	}
+	_layer_cache[layer] = info
+	return info
 
 
 # ---------------------------------------------------------------------------

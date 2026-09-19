@@ -36,7 +36,7 @@ func curve() -> GeoArc:
 	return GeoArc.make(center, radius, start_angle, end_angle, true)
 
 
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	return [curve()]
 
 

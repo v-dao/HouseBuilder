@@ -34,7 +34,7 @@ func curve() -> GeoEllipse:
 	return GeoEllipse.make(center, radius_a, radius_b, rotation, start_param, end_param)
 
 
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	return [curve()]
 
 

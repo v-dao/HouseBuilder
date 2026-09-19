@@ -32,7 +32,7 @@ func type_name() -> String:
 	return "射线" if ray else "构造线"
 
 
-func get_curves() -> Array[GeoCurve]:
+func _build_curves() -> Array[GeoCurve]:
 	if ray:
 		return [GeoSeg.make(point, point + direction * HALF_EXTENT)]
 	return [GeoSeg.make(point - direction * HALF_EXTENT, point + direction * HALF_EXTENT)]
